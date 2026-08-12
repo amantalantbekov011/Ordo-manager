@@ -57,7 +57,8 @@ $('#togglePassword').addEventListener('click', () => { const field = $('#loginPa
 $('#logoutButton').addEventListener('click', async () => { try { await api('/api/auth/logout', { method: 'POST', body: '{}' }); } finally { state.data = null; showLogin(); } });
 $('#navigation').addEventListener('click', event => {
   const button = event.target.closest('[data-page]'); if (!button) return;
-  state.page = button.dataset.page; $$('#navigation button').forEach(item => item.classList.toggle('active', item === button));
+  const page = button.dataset.page;
+  state.page = page; $$('#navigation button').forEach(item => item.classList.toggle('active', item === button));
   $('#sidebar').classList.remove('open'); renderPage();
 });
 $('#openSidebar').addEventListener('click', () => $('#sidebar').classList.add('open'));
@@ -133,7 +134,7 @@ function filterSelect(label, key, values) { return `<label class="matrix-filter"
 function renderStores() {
   const { stores, products, user }=state.data, filtered=stores.filter(storeMatches), f=state.storeFilters;
   const selected=products.find(x=>x.id===f.product), stats=selected?{yes:stores.filter(s=>matrixValue(s.id,selected.id).status==='yes').length,no:stores.filter(s=>matrixValue(s.id,selected.id).status==='no').length,unchecked:stores.filter(s=>matrixValue(s.id,selected.id).status==='unchecked').length}:null;
-  const actions=`<button class="button secondary" onclick="openStoreModal()">＋ Магазин</button>${user.role==='director'?'<button class="button primary" onclick="openProductModal()">＋ Добавить продукт</button>':''}`;
+  const actions=`<button class="button secondary" onclick="openStoreModal()">＋ Добавить торговую точку</button>${user.role==='director'?'<button class="button primary" onclick="openProductModal()">＋ Добавить продукт</button>':''}`;
   const tabs=`<div class="section-tabs"><button class="${state.storeTab==='matrix'?'active':''}" onclick="setStoreTab('matrix')">Матрица продукции</button><button class="${state.storeTab==='list'?'active':''}" onclick="setStoreTab('list')">Список точек</button><button class="${state.storeTab==='products'?'active':''}" onclick="setStoreTab('products')">Продукция</button><button class="${state.storeTab==='history'?'active':''}" onclick="setStoreTab('history')">История</button></div>`;
   const filters=`<div class="matrix-filters">${filterSelect('Агент','agent',[...new Set(stores.map(x=>x.agent).filter(Boolean))])}${filterSelect('Супервайзер','supervisor',[...new Set(stores.map(x=>x.supervisor).filter(Boolean))])}${filterSelect('Район','district',[...new Set(stores.map(x=>x.district).filter(Boolean))])}<label class="matrix-filter">Продукт<select onchange="setStoreFilter('product',this.value)"><option value="">Все</option>${products.map(p=>option(p.id,p.name,f.product)).join('')}</select></label><label class="matrix-filter">Наличие<select onchange="setStoreFilter('availability',this.value)">${option('','Все статусы',f.availability)}${option('no','Только отсутствует',f.availability)}${option('unchecked','Только непроверенные',f.availability)}${option('yes','Есть',f.availability)}</select></label></div>`;
   let content='';
@@ -160,6 +161,7 @@ function renderReports() {
 }
 function renderPage() {
   if (!state.data) return;
+  $('#globalSearch').placeholder = state.page === 'stores' ? 'Поиск магазинов, адресов и продукции…' : 'Поиск по задачам и встречам…';
   $('#navTasksCount').textContent = state.data.tasks.filter(task=>task.status!=='done').length;
   ({ dashboard: renderDashboard, tasks: renderTasks, calendar: renderCalendar, meetings: renderMeetings, errands: renderErrands, employees: renderEmployees, stores: renderStores, reports: renderReports }[state.page] || renderDashboard)();
 }

@@ -50,7 +50,9 @@ test('сервер отдаёт интерфейс и статические р�
   assert.equal(js.status, 200);
   assert.match(js.headers.get('content-type'), /javascript/);
   assert.match(js.headers.get('cache-control'), /no-store/);
-  assert.match(await (await fetch(`${base}/`)).text(), /data-page="stores"/);
+  const currentHtml = await (await fetch(`${base}/`)).text();
+  assert.match(currentHtml, /data-page="stores"/);
+  assert.match(currentHtml, /app\.js\?v=[^"']+/);
   assert.match(await (await fetch(`${base}/app.js`)).text(), /stores: renderStores/);
 });
 
