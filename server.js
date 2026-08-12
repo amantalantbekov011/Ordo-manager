@@ -380,7 +380,7 @@ async function handleApi(req, res, url) {
     }
   }
   if (url.pathname === '/api/presence' && req.method === 'POST') {
-    if (session.user.role !== 'assistant' && !canManage(session)) return sendJson(res, 403, { error: 'Недостаточно прав' });
+    if (session.user.role !== 'assistant') return sendJson(res, 403, { error: 'Только Аман может изменять свой рабочий статус' });
     const body = await readBody(req); requireFields(body, ['value']);
     db.presence = { userId: 'aman', value: clean(body.value).slice(0, 80), note: clean(body.note).slice(0, 240), updatedAt: Date.now() };
     audit(session.user.id, 'update', 'presence', 'aman'); saveDatabase(); return sendJson(res, 200, db.presence);

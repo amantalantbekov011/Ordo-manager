@@ -129,6 +129,8 @@ test('поручение директора синхронизируется с 
 
 test('роли изолированы, а сервер проверяет связанные данные', async () => {
   const directorCookie = cookie;
+  const directorPresence = await request('/api/presence', { method: 'POST', body: JSON.stringify({ value: 'На складе №1' }) });
+  assert.equal(directorPresence.response.status, 403);
   const privateEvent = await request('/api/events', { method: 'POST', body: JSON.stringify({ title: 'Только директору', date: '2026-08-15', participants: ['director'] }) });
   assert.equal(privateEvent.response.status, 201);
   const badAssignee = await request('/api/tasks', { method: 'POST', body: JSON.stringify({ title: 'Ошибка', date: '2026-08-15', assigneeId: 'unknown' }) });
@@ -141,6 +143,9 @@ test('роли изолированы, а сервер проверяет свя
   cookie = login.response.headers.get('set-cookie').split(';')[0];
   const assistantData = await request('/api/bootstrap');
   assert.equal(assistantData.value.events.some(item => item.id === privateEvent.value.id), false);
+  const assistantPresence = await request('/api/presence', { method: 'POST', body: JSON.stringify({ value: 'На складе №1', note: 'Проверка склада' }) });
+  assert.equal(assistantPresence.response.status, 200);
+  assert.equal(assistantPresence.value.userId, 'aman');
   const forbidden = await request(`/api/events/${privateEvent.value.id}`, { method: 'PATCH', body: JSON.stringify({ title: 'Взлом' }) });
   assert.equal(forbidden.response.status, 403);
   cookie = directorCookie;
