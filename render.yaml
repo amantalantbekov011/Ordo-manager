@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: ordo-manager
+    runtime: node
+    region: frankfurt
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 22
+      - key: DATA_FILE
+        value: /var/data/db.json
+      - key: DIRECTOR_PASSWORD
+        sync: false
+      - key: ASSISTANT_PASSWORD
+        sync: false
+    disk:
+      name: ordo-data
+      mountPath: /var/data
+      sizeGB: 1

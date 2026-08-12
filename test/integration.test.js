@@ -1,0 +1,126 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const port = 32187;
+const base = `http://127.0.0.1:${port}`;
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ordo-test-'));
+let server;
+let cookie = '';
+
+async function request(url, options = {}) {
+  const response = await fetch(`${base}${url}`, { ...options, headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}), ...(options.headers || {}) } });
+  const value = await response.json();
+  return { response, value };
+}
+
+test.before(async () => {
+  server = spawn(process.execPath, ['server.js'], { cwd: path.join(__dirname, '..'), env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', DATA_FILE: path.join(temp, 'db.json') }, stdio: ['ignore', 'pipe', 'pipe'] });
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Сервер не запустился')), 5000);
+    server.stdout.on('data', chunk => { if (chunk.toString().includes('ORDO Manager')) { clearTimeout(timer); resolve(); } });
+    server.on('exit', code => reject(new Error(`Сервер завершился с кодом ${code}`)));
+  });
+});
+
+test.after(() => {
+  if (server) server.kill();
+  fs.rmSync(temp, { recursive: true, force: true });
+});
+
+test('health endpoint отвечает', async () => {
+  const { response, value } = await request('/health');
+  assert.equal(response.status, 200);
+  assert.equal(value.status, 'ok');
+});
+
+test('сервер отдаёт интерфейс и статические ресурсы', async () => {
+  const html = await fetch(`${base}/`);
+  const css = await fetch(`${base}/styles.css`);
+  const js = await fetch(`${base}/app.js`);
+  assert.equal(html.status, 200);
+  assert.match(await html.text(), /ORDO Manager/);
+  assert.equal(css.status, 200);
+  assert.match(css.headers.get('content-type'), /text\/css/);
+  assert.equal(js.status, 200);
+  assert.match(js.headers.get('content-type'), /javascript/);
+});
+
+test('закрытый API требует авторизацию', async () => {
+  const { response } = await request('/api/bootstrap');
+  assert.equal(response.status, 401);
+});
+
+test('авторизация и загрузка портала', async () => {
+  const { response, value } = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ userId: 'director', password: '1234' }) });
+  assert.equal(response.status, 200);
+  assert.equal(value.user.role, 'director');
+  cookie = response.headers.get('set-cookie').split(';')[0];
+  const bootstrap = await request('/api/bootstrap');
+  assert.equal(bootstrap.response.status, 200);
+  assert.ok(bootstrap.value.tasks.length >= 3);
+  assert.equal(bootstrap.value.user.name, 'Эрлан Атанбекович');
+  assert.equal(bootstrap.value.user.title, 'Генеральный директор');
+  assert.equal(bootstrap.value.employees.length, 1);
+  assert.equal(bootstrap.value.employees[0].name, 'Аман Талантбекович');
+  assert.ok(bootstrap.value.tasks.some(item => item.status === 'done'));
+  assert.ok(bootstrap.value.tasks.some(item => item.status !== 'done' && item.date < new Date().toISOString().slice(0, 10)));
+});
+
+test('создание, изменение и удаление задачи', async () => {
+  const created = await request('/api/tasks', { method: 'POST', body: JSON.stringify({ title: 'Тестовая задача', date: '2026-08-12', assigneeId: 'aman', priority: 'high' }) });
+  assert.equal(created.response.status, 201);
+  assert.equal(created.value.title, 'Тестовая задача');
+  const changed = await request(`/api/tasks/${created.value.id}`, { method: 'PATCH', body: JSON.stringify({ status: 'done' }) });
+  assert.equal(changed.value.status, 'done');
+  const removed = await request(`/api/tasks/${created.value.id}`, { method: 'DELETE' });
+  assert.equal(removed.value.ok, true);
+});
+
+test('создание встречи, поручения и сотрудника', async () => {
+  const meeting = await request('/api/events', { method: 'POST', body: JSON.stringify({ title: 'Тестовая встреча', date: '2026-08-13', type: 'meeting' }) });
+  const errand = await request('/api/errands', { method: 'POST', body: JSON.stringify({ title: 'Тестовое поручение', date: '2026-08-13', place: 'Офис' }) });
+  const employee = await request('/api/employees', { method: 'POST', body: JSON.stringify({ name: 'Тестовый Сотрудник', position: 'Специалист' }) });
+  assert.equal(meeting.response.status, 201);
+  assert.equal(errand.response.status, 201);
+  assert.equal(employee.response.status, 201);
+});
+
+test('поручение директора синхронизируется с кабинетом ассистента', async () => {
+  const directorCookie = cookie;
+  const created = await request('/api/errands', { method: 'POST', body: JSON.stringify({ title: 'Поручение от Эрлана', description: 'Сквозной тест двух кабинетов', date: '2026-08-14', assigneeId: 'aman', status: 'new' }) });
+  assert.equal(created.response.status, 201);
+  assert.equal(created.value.assigneeId, 'aman');
+
+  cookie = '';
+  const assistantLogin = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ userId: 'aman', password: '1234' }) });
+  assert.equal(assistantLogin.value.user.name, 'Аман Талантбекович');
+  assert.equal(assistantLogin.value.user.role, 'assistant');
+  cookie = assistantLogin.response.headers.get('set-cookie').split(';')[0];
+  const assistantData = await request('/api/bootstrap');
+  assert.ok(assistantData.value.errands.some(item => item.id === created.value.id));
+  assert.deepEqual(assistantData.value.audit, []);
+
+  const completed = await request(`/api/errands/${created.value.id}`, { method: 'PATCH', body: JSON.stringify({ status: 'done' }) });
+  assert.equal(completed.value.status, 'done');
+  const verbal = await request('/api/errands', { method: 'POST', body: JSON.stringify({ title: 'Устное поручение директора', date: '2026-08-14', assigneeId: 'aman', status: 'new' }) });
+  assert.equal(verbal.response.status, 201);
+
+  cookie = directorCookie;
+  const directorData = await request('/api/bootstrap');
+  assert.equal(directorData.value.errands.find(item => item.id === created.value.id).status, 'done');
+  assert.ok(directorData.value.errands.some(item => item.id === verbal.value.id));
+  assert.ok(directorData.value.audit.some(item => item.entityId === created.value.id && item.action === 'update'));
+});
+
+test('выход завершает сессию', async () => {
+  const logout = await request('/api/auth/logout', { method: 'POST', body: '{}' });
+  assert.equal(logout.response.status, 200);
+  const closed = await request('/api/bootstrap');
+  assert.equal(closed.response.status, 401);
+});
