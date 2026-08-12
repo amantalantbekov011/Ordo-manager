@@ -6,3 +6,5 @@ data/*.broken-*
 .env
 .DS_Store
 npm-debug.log*
+.tools/
+gh_*_windows_amd64.zip
