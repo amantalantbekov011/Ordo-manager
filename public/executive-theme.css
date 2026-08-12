@@ -25,6 +25,11 @@
 .metric, .panel, .employee-card, .login-card { box-shadow: 0 1px 0 rgba(60, 50, 38, .02); }
 .button.primary { background: linear-gradient(135deg, #303536, #202425); }
 .navigation button.active { background: rgba(196, 163, 105, .12); }
+.navigation a { position:relative; border:0; color:#afc0ce; background:transparent; border-radius:11px; padding:13px 14px; display:flex; align-items:center; gap:13px; text-align:left; text-decoration:none; }
+.navigation a > span { font-size:19px; width:23px; text-align:center; }
+.navigation a b { font-size:13px; }
+.navigation a:hover,.navigation a.active { color:#fff; background:rgba(196,163,105,.12); }
+.navigation a.active:before { content:""; position:absolute; left:-16px; height:25px; width:3px; border-radius:0 3px 3px 0; background:#d2a958; }
 .topbar { background: rgba(255, 255, 255, .92); backdrop-filter: blur(14px); }
 
 .report-bars, .audit-list { display: grid; gap: 16px; }

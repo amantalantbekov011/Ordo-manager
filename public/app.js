@@ -2,7 +2,8 @@
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
-const state = { data: null, page: 'dashboard', taskFilter: 'all', search: '', calendar: new Date(), storeTab: 'matrix', storeFilters: { agent: '', supervisor: '', district: '', product: '', availability: '' } };
+const requestedPage = new URLSearchParams(location.search).get('view');
+const state = { data: null, page: requestedPage === 'stores' ? 'stores' : 'dashboard', taskFilter: 'all', search: '', calendar: new Date(), storeTab: 'matrix', storeFilters: { agent: '', supervisor: '', district: '', product: '', availability: '' } };
 const labels = {
   status: { new: 'Новая', work: 'В работе', wait: 'Ожидает', done: 'Выполнено' },
   priority: { low: 'Низкий', medium: 'Средний', high: 'Высокий' },
@@ -43,6 +44,7 @@ function showApp() {
   $('#sideAvatar').textContent = $('#topAvatar').textContent = initials(user.name);
   $('#reportsNavigation').classList.toggle('hidden', user.role !== 'director');
   $('#navTasksCount').textContent = state.data.tasks.filter(task => task.status !== 'done').length;
+  $$('#navigation [data-page]').forEach(item => item.classList.toggle('active', item.dataset.page === state.page));
   renderPage();
 }
 
@@ -58,6 +60,7 @@ $('#logoutButton').addEventListener('click', async () => { try { await api('/api
 $('#navigation').addEventListener('click', event => {
   const button = event.target.closest('[data-page]'); if (!button) return;
   const page = button.dataset.page;
+  if (button.tagName === 'A') return;
   state.page = page; $$('#navigation button').forEach(item => item.classList.toggle('active', item === button));
   $('#sidebar').classList.remove('open'); renderPage();
 });
@@ -167,7 +170,7 @@ function renderPage() {
 }
 function matches(item) { if (!state.search) return true; return Object.values(item).some(value => String(value).toLowerCase().includes(state.search)); }
 function localIso(date) { const y=date.getFullYear(),m=String(date.getMonth()+1).padStart(2,'0'),d=String(date.getDate()).padStart(2,'0'); return `${y}-${m}-${d}`; }
-window.goPage = page => { state.page=page; $$('#navigation button').forEach(x=>x.classList.toggle('active',x.dataset.page===page)); renderPage(); };
+window.goPage = page => { state.page=page; $$('#navigation [data-page]').forEach(x=>x.classList.toggle('active',x.dataset.page===page)); renderPage(); };
 window.setTaskFilter = value => { state.taskFilter=value; renderTasks(); };
 window.setLocalSearch = value => { state.search=value.toLowerCase().trim(); renderTasks(); };
 window.changeMonth = amount => { state.calendar.setMonth(state.calendar.getMonth()+amount); renderCalendar(); };
