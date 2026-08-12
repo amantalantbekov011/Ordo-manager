@@ -42,6 +42,19 @@ function seedDatabase() {
     employees: [
       { id: 'emp_aman', userId: 'aman', name: 'Аман Талантбекович', position: 'Ассистент генерального директора', department: 'Администрация', phone: '', email: 'aman@ordo.local', status: 'online' }
     ],
+    stores: [
+      { id: 'store_1', name: 'Globus', address: 'пр. Чуй, 92', district: 'Центр', agent: 'Бакыт Садыков', supervisor: 'Айбек Омуров', phone: '+996 555 100 200', note: 'Ключевая торговая точка', createdAt: Date.now() },
+      { id: 'store_2', name: 'Народный', address: 'ул. Киевская, 104', district: 'Центр', agent: 'Бакыт Садыков', supervisor: 'Айбек Омуров', phone: '+996 555 200 300', note: '', createdAt: Date.now() }
+    ],
+    products: [
+      { id: 'product_1', name: 'Напиток ORDO', category: 'Напитки', variant: 'Классический', note: '', order: 0, createdAt: Date.now() },
+      { id: 'product_2', name: 'Напиток ORDO Light', category: 'Напитки', variant: 'Лайм', note: '', order: 1, createdAt: Date.now() }
+    ],
+    matrix: {
+      'store_1:product_1': { status: 'yes', quantity: 12, checkedAt: Date.now(), comment: 'На основной полке', checkedBy: 'director' },
+      'store_1:product_2': { status: 'no', quantity: 0, checkedAt: Date.now(), comment: '', checkedBy: 'director' }
+    },
+    matrixHistory: [],
     tasks: [
       { id: 'task_1', title: 'Подготовить документы к встрече', description: 'Собрать договор, приложение и краткую справку.', category: 'Документы', date, time: '11:30', priority: 'high', status: 'new', assigneeId: 'aman', creatorId: 'director', createdAt: Date.now() },
       { id: 'task_2', title: 'Проверить остатки на складе', description: 'Сверить ключевые позиции с учётной системой.', category: 'Склад', date, time: '09:30', priority: 'medium', status: 'work', assigneeId: 'aman', creatorId: 'director', createdAt: Date.now() },
@@ -66,6 +79,10 @@ function migrateDatabase(value) {
   db.version = 2;
   db.users = Array.isArray(db.users) ? db.users : fresh.users;
   db.employees = Array.isArray(db.employees) ? db.employees : fresh.employees;
+  db.stores = Array.isArray(db.stores) ? db.stores : fresh.stores;
+  db.products = Array.isArray(db.products) ? db.products : fresh.products;
+  db.matrix = db.matrix && typeof db.matrix === 'object' ? db.matrix : {};
+  db.matrixHistory = Array.isArray(db.matrixHistory) ? db.matrixHistory : [];
   db.tasks = Array.isArray(db.tasks) ? db.tasks : [];
   db.events = Array.isArray(db.events) ? db.events : [];
   db.errands = Array.isArray(db.errands) ? db.errands : [];
@@ -217,8 +234,63 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, {
       user: session.user, users: db.users.filter(user => user.active).map(publicUser), employees: db.employees,
       tasks: visible(db.tasks), events: visible(db.events), errands: visible(db.errands), presence: db.presence,
+      stores: db.stores, products: db.products.slice().sort((a, b) => a.order - b.order), matrix: db.matrix,
+      matrixHistory: db.matrixHistory.slice(0, 100),
       audit: canManage(session) ? db.audit.slice(0, 30) : []
     });
+  }
+
+  if (url.pathname === '/api/stores' && req.method === 'POST') {
+    const body = await readBody(req); requireFields(body, ['name', 'address']);
+    const store = { id: uid('store'), name: clean(body.name).slice(0, 160), address: clean(body.address).slice(0, 240), district: clean(body.district).slice(0, 100), agent: clean(body.agent).slice(0, 160), supervisor: clean(body.supervisor).slice(0, 160), phone: clean(body.phone).slice(0, 80), note: clean(body.note).slice(0, 1000), createdAt: Date.now() };
+    db.stores.push(store); audit(session.user.id, 'create', 'store', store.id); saveDatabase(); return sendJson(res, 201, store);
+  }
+  if (url.pathname.startsWith('/api/stores/')) {
+    const id = decodeURIComponent(url.pathname.slice('/api/stores/'.length));
+    const store = findOr404(db.stores, id, 'Торговая точка');
+    if (req.method === 'PATCH') {
+      const body = await readBody(req); requireFields({ ...store, ...body }, ['name', 'address']);
+      for (const key of ['name', 'address', 'district', 'agent', 'supervisor', 'phone', 'note']) if (key in body) store[key] = clean(body[key]).slice(0, key === 'note' ? 1000 : 240);
+      store.updatedAt = Date.now(); audit(session.user.id, 'update', 'store', id); saveDatabase(); return sendJson(res, 200, store);
+    }
+    if (req.method === 'DELETE') {
+      if (!canManage(session)) return sendJson(res, 403, { error: 'Только директор может удалять торговые точки' });
+      db.stores.splice(db.stores.indexOf(store), 1); for (const key of Object.keys(db.matrix)) if (key.startsWith(`${id}:`)) delete db.matrix[key];
+      audit(session.user.id, 'delete', 'store', id); saveDatabase(); return sendJson(res, 200, { ok: true });
+    }
+  }
+  if (url.pathname === '/api/products' && req.method === 'POST') {
+    if (!canManage(session)) return sendJson(res, 403, { error: 'Только директор может управлять продукцией' });
+    const body = await readBody(req); requireFields(body, ['name']);
+    const product = { id: uid('product'), name: clean(body.name).slice(0, 160), category: clean(body.category).slice(0, 100), variant: clean(body.variant).slice(0, 100), note: clean(body.note).slice(0, 1000), order: db.products.length, createdAt: Date.now() };
+    db.products.push(product); audit(session.user.id, 'create', 'product', product.id); saveDatabase(); return sendJson(res, 201, product);
+  }
+  if (url.pathname.startsWith('/api/products/') && url.pathname !== '/api/products/reorder') {
+    if (!canManage(session)) return sendJson(res, 403, { error: 'Только директор может управлять продукцией' });
+    const id = decodeURIComponent(url.pathname.slice('/api/products/'.length)); const product = findOr404(db.products, id, 'Продукт');
+    if (req.method === 'PATCH') {
+      const body = await readBody(req); for (const key of ['name', 'category', 'variant', 'note']) if (key in body) product[key] = clean(body[key]).slice(0, key === 'note' ? 1000 : 160);
+      if (Number.isInteger(Number(body.order))) product.order = Math.max(0, Number(body.order));
+      audit(session.user.id, 'update', 'product', id); saveDatabase(); return sendJson(res, 200, product);
+    }
+    if (req.method === 'DELETE') {
+      db.products.splice(db.products.indexOf(product), 1); for (const key of Object.keys(db.matrix)) if (key.endsWith(`:${id}`)) delete db.matrix[key];
+      audit(session.user.id, 'delete', 'product', id); saveDatabase(); return sendJson(res, 200, { ok: true });
+    }
+  }
+  if (url.pathname === '/api/products/reorder' && req.method === 'POST') {
+    if (!canManage(session)) return sendJson(res, 403, { error: 'Недостаточно прав' });
+    const body = await readBody(req); if (!Array.isArray(body.ids)) return sendJson(res, 400, { error: 'Некорректный порядок' });
+    body.ids.forEach((id, index) => { const product = db.products.find(item => item.id === id); if (product) product.order = index; }); saveDatabase(); return sendJson(res, 200, { ok: true });
+  }
+  if (url.pathname === '/api/matrix' && req.method === 'POST') {
+    const body = await readBody(req); requireFields(body, ['storeId', 'productId', 'status']);
+    findOr404(db.stores, clean(body.storeId), 'Торговая точка'); findOr404(db.products, clean(body.productId), 'Продукт');
+    if (!['yes', 'no', 'unchecked'].includes(body.status)) return sendJson(res, 400, { error: 'Некорректный статус' });
+    const key = `${clean(body.storeId)}:${clean(body.productId)}`, previous = db.matrix[key] || { status: 'unchecked' };
+    const value = { status: body.status, quantity: Math.max(0, Number(body.quantity) || 0), checkedAt: Date.now(), comment: clean(body.comment).slice(0, 1000), checkedBy: session.user.id };
+    db.matrix[key] = value; db.matrixHistory.unshift({ id: uid('history'), storeId: clean(body.storeId), productId: clean(body.productId), oldStatus: previous.status, newStatus: value.status, quantity: value.quantity, comment: value.comment, userId: session.user.id, at: Date.now() }); db.matrixHistory = db.matrixHistory.slice(0, 2000);
+    audit(session.user.id, 'update', 'matrix', key); saveDatabase(); return sendJson(res, 200, value);
   }
 
   const routes = [

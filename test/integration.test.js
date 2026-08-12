@@ -146,6 +146,35 @@ test('комментарий о результате сохраняется по
   assert.equal(reloaded.value.tasks.find(item => item.id === created.value.id).resultComment, 'Документы переданы директору');
 });
 
+test('матрица продукции: магазин, продукт, статусы, история и задача', async () => {
+  const store = await request('/api/stores', { method: 'POST', body: JSON.stringify({ name: 'Тестовый Globus', address: 'ул. Тестовая, 1', district: 'Центр', agent: 'Тест Агент', supervisor: 'Тест Супервайзер' }) });
+  const product = await request('/api/products', { method: 'POST', body: JSON.stringify({ name: 'Тестовый продукт', category: 'Напитки', variant: 'Яблоко' }) });
+  assert.equal(store.response.status, 201); assert.equal(product.response.status, 201);
+  const present = await request('/api/matrix', { method: 'POST', body: JSON.stringify({ storeId: store.value.id, productId: product.value.id, status: 'yes', quantity: 8, comment: 'На полке' }) });
+  assert.equal(present.value.status, 'yes'); assert.equal(present.value.quantity, 8);
+  const absent = await request('/api/matrix', { method: 'POST', body: JSON.stringify({ storeId: store.value.id, productId: product.value.id, status: 'no', quantity: 0, comment: 'Закончился' }) });
+  assert.equal(absent.value.status, 'no');
+  const data = await request('/api/bootstrap');
+  assert.equal(data.value.matrix[`${store.value.id}:${product.value.id}`].comment, 'Закончился');
+  assert.equal(data.value.matrixHistory.filter(item => item.storeId === store.value.id && item.productId === product.value.id).length, 2);
+  const task = await request('/api/tasks', { method: 'POST', body: JSON.stringify({ title: `Обеспечить наличие: ${product.value.name}`, description: `Магазин: ${store.value.name}`, date: '2026-08-12', assigneeId: 'aman', category: 'Торговые точки' }) });
+  assert.equal(task.response.status, 201);
+});
+
+test('ассистент может редактировать магазины и матрицу, но не продукты', async () => {
+  const directorCookie = cookie;
+  cookie = '';
+  const login = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ userId: 'aman', password: '1234' }) });
+  cookie = login.response.headers.get('set-cookie').split(';')[0];
+  const store = await request('/api/stores', { method: 'POST', body: JSON.stringify({ name: 'Точка Амана', address: 'ул. Помощника, 2' }) });
+  assert.equal(store.response.status, 201);
+  const changed = await request(`/api/stores/${store.value.id}`, { method: 'PATCH', body: JSON.stringify({ note: 'Проверено ассистентом' }) });
+  assert.equal(changed.value.note, 'Проверено ассистентом');
+  const forbidden = await request('/api/products', { method: 'POST', body: JSON.stringify({ name: 'Недоступный продукт' }) });
+  assert.equal(forbidden.response.status, 403);
+  cookie = directorCookie;
+});
+
 test('выход завершает сессию', async () => {
   const logout = await request('/api/auth/logout', { method: 'POST', body: '{}' });
   assert.equal(logout.response.status, 200);

@@ -129,6 +129,11 @@ button, input, select, textarea { min-width: 0; }
   .modal-close { width: 40px; height: 40px; }
   .toast { left: 12px; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); text-align: center; }
   .report-line > div:first-child { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .matrix-scroll { display: none; }
+  .matrix-mobile { display: grid; gap: 10px; padding: 12px; }
+  .matrix-filters { display: grid; grid-template-columns: 1fr 1fr; }
+  .matrix-filter select { min-width: 0; width: 100%; }
+  .product-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 390px) {
