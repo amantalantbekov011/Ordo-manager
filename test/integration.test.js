@@ -73,6 +73,7 @@ test('авторизация и загрузка портала', async () => {
   assert.equal(bootstrap.value.user.name, 'Эрлан Атанбекович');
   assert.equal(bootstrap.value.user.title, 'Генеральный директор');
   assert.equal(bootstrap.value.employees.length, 1);
+  assert.deepEqual(bootstrap.value.users.map(user => user.role).sort(), ['assistant', 'director']);
   assert.equal(bootstrap.value.employees[0].name, 'Аман Талантбекович');
   assert.ok(bootstrap.value.tasks.some(item => item.status === 'done'));
   assert.ok(bootstrap.value.tasks.some(item => item.status !== 'done' && item.date < new Date().toISOString().slice(0, 10)));
@@ -89,12 +90,13 @@ test('создание, изменение и удаление задачи', as
 });
 
 test('создание встречи, поручения и сотрудника', async () => {
-  const meeting = await request('/api/events', { method: 'POST', body: JSON.stringify({ title: 'Тестовая встреча', date: '2026-08-13', type: 'meeting' }) });
+  const meeting = await request('/api/events', { method: 'POST', body: JSON.stringify({ title: 'Тестовая встреча', date: '2026-08-13', type: 'meeting', participants: ['director', 'aman'] }) });
   const errand = await request('/api/errands', { method: 'POST', body: JSON.stringify({ title: 'Тестовое поручение', date: '2026-08-13', place: 'Офис' }) });
   const employee = await request('/api/employees', { method: 'POST', body: JSON.stringify({ name: 'Тестовый Сотрудник', position: 'Специалист' }) });
   assert.equal(meeting.response.status, 201);
   assert.equal(errand.response.status, 201);
   assert.equal(employee.response.status, 201);
+  assert.deepEqual(meeting.value.participants.sort(), ['aman', 'director']);
 });
 
 test('поручение директора синхронизируется с кабинетом ассистента', async () => {
@@ -186,4 +188,23 @@ test('выход завершает сессию', async () => {
   assert.equal(logout.response.status, 200);
   const closed = await request('/api/bootstrap');
   assert.equal(closed.response.status, 401);
+});
+
+test('данные сохраняются после полного перезапуска сервера', async () => {
+  const restartPort = 32188, restartBase = `http://127.0.0.1:${restartPort}`, restartFile = path.join(temp, 'restart-db.json');
+  const start = async () => {
+    const child = spawn(process.execPath, ['server.js'], { cwd: path.join(__dirname, '..'), env: { ...process.env, PORT: String(restartPort), HOST: '127.0.0.1', DATA_FILE: restartFile }, stdio: ['ignore', 'pipe', 'pipe'] });
+    await new Promise((resolve, reject) => { const timer=setTimeout(()=>reject(new Error('Сервер перезапуска не запустился')),5000); child.stdout.on('data',chunk=>{if(chunk.toString().includes('ORDO Manager')){clearTimeout(timer);resolve();}}); });
+    return child;
+  };
+  let child = await start();
+  let response = await fetch(`${restartBase}/api/auth/login`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId:'director',password:'1234'}) });
+  const restartCookie=response.headers.get('set-cookie').split(';')[0];
+  response=await fetch(`${restartBase}/api/stores`,{method:'POST',headers:{'Content-Type':'application/json',Cookie:restartCookie},body:JSON.stringify({name:'Переживает перезапуск',address:'Постоянный адрес'})});
+  const savedStore=await response.json(); assert.equal(response.status,201);
+  child.kill(); await new Promise(resolve=>child.once('exit',resolve)); child=await start();
+  response=await fetch(`${restartBase}/api/auth/login`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId:'director',password:'1234'}) });
+  const secondCookie=response.headers.get('set-cookie').split(';')[0];
+  response=await fetch(`${restartBase}/api/bootstrap`,{headers:{Cookie:secondCookie}}); const persisted=await response.json();
+  assert.ok(persisted.stores.some(store=>store.id===savedStore.id)); child.kill();
 });
