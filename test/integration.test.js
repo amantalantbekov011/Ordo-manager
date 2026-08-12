@@ -75,6 +75,7 @@ test('авторизация и загрузка портала', async () => {
   assert.equal(bootstrap.value.employees.length, 1);
   assert.deepEqual(bootstrap.value.users.map(user => user.role).sort(), ['assistant', 'director']);
   assert.equal(bootstrap.value.employees[0].name, 'Аман Талантбекович');
+  assert.deepEqual(bootstrap.value.locations.map(item => item.name), ['Головной офис', 'Склад №1', 'Склад №2']);
   assert.ok(bootstrap.value.tasks.some(item => item.status === 'done'));
   assert.ok(bootstrap.value.tasks.some(item => item.status !== 'done' && item.date < new Date().toISOString().slice(0, 10)));
 });
@@ -167,6 +168,18 @@ test('матрица продукции: магазин, продукт, ста�
   assert.equal(data.value.matrixHistory.filter(item => item.storeId === store.value.id && item.productId === product.value.id).length, 2);
   const task = await request('/api/tasks', { method: 'POST', body: JSON.stringify({ title: `Обеспечить наличие: ${product.value.name}`, description: `Магазин: ${store.value.name}`, date: '2026-08-12', assigneeId: 'aman', category: 'Торговые точки' }) });
   assert.equal(task.response.status, 201);
+});
+
+test('объекты компании связаны с задачами и встречами', async () => {
+  const bootstrap = await request('/api/bootstrap'); const warehouse = bootstrap.value.locations.find(item => item.name === 'Склад №1');
+  const edited = await request(`/api/locations/${warehouse.id}`, { method:'PATCH', body:JSON.stringify({ address:'Тестовый адрес склада', responsible:'Аман', phone:'+996 555 000 001' }) });
+  assert.equal(edited.value.address, 'Тестовый адрес склада');
+  const task = await request('/api/tasks', { method:'POST', body:JSON.stringify({ title:'Задача склада', date:'2026-08-14', assigneeId:'aman', locationId:warehouse.id }) });
+  const event = await request('/api/events', { method:'POST', body:JSON.stringify({ title:'Встреча склада', date:'2026-08-14', participants:['director','aman'], locationId:warehouse.id }) });
+  assert.equal(task.value.locationId, warehouse.id); assert.equal(event.value.locationId, warehouse.id);
+  const persisted = await request('/api/bootstrap');
+  assert.equal(persisted.value.tasks.find(item=>item.id===task.value.id).locationId, warehouse.id);
+  assert.equal(persisted.value.events.find(item=>item.id===event.value.id).locationId, warehouse.id);
 });
 
 test('ассистент может редактировать магазины и матрицу, но не продукты', async () => {

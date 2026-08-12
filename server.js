@@ -42,6 +42,11 @@ function seedDatabase() {
     employees: [
       { id: 'emp_aman', userId: 'aman', name: 'Аман Талантбекович', position: 'Ассистент генерального директора', department: 'Администрация', phone: '', email: 'aman@ordo.local', status: 'online' }
     ],
+    locations: [
+      { id: 'location_hq', name: 'Головной офис', type: 'office', address: '', responsible: '', phone: '', note: '', status: 'active', createdAt: Date.now() },
+      { id: 'location_wh1', name: 'Склад №1', type: 'warehouse', address: '', responsible: '', phone: '', note: '', status: 'active', createdAt: Date.now() },
+      { id: 'location_wh2', name: 'Склад №2', type: 'warehouse', address: '', responsible: '', phone: '', note: '', status: 'active', createdAt: Date.now() }
+    ],
     stores: [
       { id: 'store_1', name: 'Globus', address: 'пр. Чуй, 92', district: 'Центр', agent: 'Бакыт Садыков', supervisor: 'Айбек Омуров', phone: '+996 555 100 200', note: 'Ключевая торговая точка', createdAt: Date.now() },
       { id: 'store_2', name: 'Народный', address: 'ул. Киевская, 104', district: 'Центр', agent: 'Бакыт Садыков', supervisor: 'Айбек Омуров', phone: '+996 555 200 300', note: '', createdAt: Date.now() }
@@ -79,6 +84,7 @@ function migrateDatabase(value) {
   db.version = 2;
   db.users = Array.isArray(db.users) ? db.users : fresh.users;
   db.employees = Array.isArray(db.employees) ? db.employees : fresh.employees;
+  db.locations = Array.isArray(db.locations) && db.locations.length ? db.locations : fresh.locations;
   db.stores = Array.isArray(db.stores) ? db.stores : fresh.stores;
   db.products = Array.isArray(db.products) ? db.products : fresh.products;
   db.matrix = db.matrix && typeof db.matrix === 'object' ? db.matrix : {};
@@ -179,6 +185,9 @@ function validTime(value) { return !value || /^([01]\d|2[0-3]):[0-5]\d$/.test(va
 function requireKnownUser(id, label = 'Пользователь') {
   if (!db.users.some(user => user.id === id && user.active)) throw Object.assign(new Error(`${label} не найден`), { status: 400 });
 }
+function requireKnownLocation(id) {
+  if (id && !db.locations.some(location => location.id === id && location.status === 'active')) throw Object.assign(new Error('Объект компании не найден или неактивен'), { status: 400 });
+}
 function visibleTo(session, item) {
   if (canManage(session)) return true;
   return item.creatorId === session.user.id || item.assigneeId === session.user.id || item.participants?.includes(session.user.id);
@@ -186,9 +195,11 @@ function visibleTo(session, item) {
 function taskPayload(body, current = {}) {
   requireFields(body, ['title', 'date']);
   const date = clean(body.date), time = clean(body.time), assigneeId = clean(body.assigneeId || 'aman');
+  const locationId = clean(body.locationId);
   if (!validDate(date)) throw Object.assign(new Error('Некорректная дата'), { status: 400 });
   if (!validTime(time)) throw Object.assign(new Error('Некорректное время'), { status: 400 });
   requireKnownUser(assigneeId, 'Исполнитель');
+  requireKnownLocation(locationId);
   return {
     ...current,
     title: clean(body.title).slice(0, 160), description: clean(body.description).slice(0, 2000),
@@ -196,12 +207,13 @@ function taskPayload(body, current = {}) {
     resultComment: clean(body.resultComment).slice(0, 2000),
     priority: ['low', 'medium', 'high'].includes(body.priority) ? body.priority : 'medium',
     status: ['new', 'work', 'wait', 'done'].includes(body.status) ? body.status : 'new',
-    assigneeId
+    assigneeId, locationId, customLocation: clean(body.customLocation).slice(0, 160)
   };
 }
 function eventPayload(body, current = {}) {
   requireFields(body, ['title', 'date']);
   const date = clean(body.date), time = clean(body.time), endTime = clean(body.endTime);
+  const locationId = clean(body.locationId); requireKnownLocation(locationId);
   if (!validDate(date)) throw Object.assign(new Error('Некорректная дата'), { status: 400 });
   if (!validTime(time) || !validTime(endTime)) throw Object.assign(new Error('Некорректное время'), { status: 400 });
   if (time && endTime && endTime <= time) throw Object.assign(new Error('Время окончания должно быть позже начала'), { status: 400 });
@@ -211,7 +223,7 @@ function eventPayload(body, current = {}) {
     ...current, title: clean(body.title).slice(0, 160), description: clean(body.description).slice(0, 2000),
     date, time, endTime, place: clean(body.place).slice(0, 160),
     type: ['meeting', 'call', 'trip', 'other'].includes(body.type) ? body.type : 'meeting',
-    participants
+    participants, locationId
   };
 }
 function errandPayload(body, current = {}) {
@@ -241,11 +253,29 @@ async function handleApi(req, res, url) {
     const visible = collection => collection.filter(item => visibleTo(session, item));
     return sendJson(res, 200, {
       user: session.user, users: db.users.filter(user => user.active).map(publicUser), employees: db.employees,
+      locations: db.locations,
       tasks: visible(db.tasks), events: visible(db.events), errands: visible(db.errands), presence: db.presence,
       stores: db.stores, products: db.products.slice().sort((a, b) => a.order - b.order), matrix: db.matrix,
       matrixHistory: db.matrixHistory.slice(0, 100),
       audit: canManage(session) ? db.audit.slice(0, 30) : []
     });
+  }
+
+  if (url.pathname === '/api/locations' && req.method === 'POST') {
+    if (!canManage(session)) return sendJson(res, 403, { error: 'Только директор может добавлять объекты' });
+    const body = await readBody(req); requireFields(body, ['name', 'type']);
+    if (!['office', 'warehouse'].includes(body.type)) return sendJson(res, 400, { error: 'Некорректный тип объекта' });
+    const location = { id: uid('location'), name: clean(body.name).slice(0, 160), type: body.type, address: clean(body.address).slice(0, 240), responsible: clean(body.responsible).slice(0, 160), phone: clean(body.phone).slice(0, 80), note: clean(body.note).slice(0, 1000), status: body.status === 'inactive' ? 'inactive' : 'active', createdAt: Date.now() };
+    db.locations.push(location); audit(session.user.id, 'create', 'location', location.id); saveDatabase(); return sendJson(res, 201, location);
+  }
+  if (url.pathname.startsWith('/api/locations/')) {
+    if (!canManage(session)) return sendJson(res, 403, { error: 'Только директор может изменять объекты' });
+    const id = decodeURIComponent(url.pathname.slice('/api/locations/'.length)); const location = findOr404(db.locations, id, 'Объект компании');
+    if (req.method === 'PATCH') {
+      const body = await readBody(req); for (const key of ['name','address','responsible','phone','note']) if (key in body) location[key]=clean(body[key]).slice(0,key==='note'?1000:240);
+      if (body.type && ['office','warehouse'].includes(body.type)) location.type=body.type; if (body.status && ['active','inactive'].includes(body.status)) location.status=body.status;
+      location.updatedAt=Date.now(); audit(session.user.id,'update','location',id); saveDatabase(); return sendJson(res,200,location);
+    }
   }
 
   if (url.pathname === '/api/stores' && req.method === 'POST') {

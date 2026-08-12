@@ -35,6 +35,7 @@ button, input, select, textarea { min-width: 0; }
 }
 
 @media (max-width: 1050px) {
+  .location-grid { grid-template-columns: 1fr 1fr; }
   .sidebar { width: 220px; }
   .main { margin-left: 220px; }
   .page-host { padding: 22px 20px 40px; }
@@ -73,6 +74,7 @@ button, input, select, textarea { min-width: 0; }
 }
 
 @media (max-width: 600px) {
+  .location-grid { grid-template-columns: 1fr; }
   .topbar { position: sticky; }
   .global-search span, .global-search input { font-size: 11px; }
   .notification { display: none; }
