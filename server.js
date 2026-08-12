@@ -180,12 +180,109 @@ async function handleApi(req, res, url) {
     const body = await readBody(req);
     const user = db.users.find(item => item.id === clean(body.userId) && item.active);
     if (!user || !verifyPassword(String(body.password || ''), user.passwordHash)) return sendJson(res, 401, { error: 'Неверный пользователь или пароль' });
-    const token = crypto.randomBytes(32+^��[h��춻�q�^t<label class="full">Название<input name="title" value="${esc(item.title)}" required maxlength="160"></label><label class="full">Описание<textarea name="description">${esc(item.description)}</textarea></label><label>Тип<select name="type">${Object.entries(labels.eventType).map(([v,l])=>option(v,l,item.type||'meeting')).join('')}</select></label><label>Место<input name="place" value="${esc(item.place)}"></label><label>Дата<input name="date" type="date" value="${item.date||isoToday()}" required></label><label>Начало<input name="time" type="time" value="${item.time||''}"></label><label>Окончание<input name="endTime" type="time" value="${item.endTime||''}"></label><label>Участники<select name="participants" multiple>${state.data.users.map(user=>option(user.id,user.name,item.participants?.includes(user.id)?user.id:'')).join('')}</select></label>`;
-  if(type==='employee') fields=`<label class="full">ФИО<input name="name" value="${esc(item.name)}" required></label><label>Должность<input name="position" value="${esc(item.position)}" required></label><label>Подразделение<input name="department" value="${esc(item.department)}"></label><label>Телефон<input name="phone" value="${esc(item.phone)}"></label><label>Email<input name="email" type="email" value="${esc(item.email)}"></label><label>Статус<select name="status">${option('office','В офисе',item.status||'office')}${option('online','На связи',item.status)}${option('away','Вне офиса',item.status)}</select></label>`;
-  openModal(`<h2>${editing?'Изменить':'Добавить'} ${config.title}</h2><p>Заполните основные данные и сохраните изменения.</p><form id="entityForm" class="form-grid">${fields}<div class="form-actions full">${editing?`<button type="button" class="button danger" onclick="deleteEntity('${type}','${id}')">Удалить</button>`:''}<button type="button" class="button secondary" onclick="closeModal()">Отмена</button><button class="button primary">Сохранить</button></div></form>`);
-  $('#entityForm').addEventListener('submit',async event=>{event.preventDefault();const form=new FormData(event.target);const body=Object.fromEntries(form.entries());if(type==='event')body.participants=form.getAll('participants');try{await api(`/api/${config.collection}${editing?`/${id}`:''}`,{method:editing?'PATCH':'POST',body:JSON.stringify(body)});closeModal();await refresh();toast(editing?'Изменения сохранены':'Запись создана');}catch(error){toast(error.message,true);}});
-};
-window.deleteEntity=async(type,id)=>{if(!confirm('Удалить запись без возможности восстановления?'))return;const collection={task:'tasks',event:'events',errand:'errands',employee:'employees'}[type];try{await api(`/api/${collection}/${id}`,{method:'DELETE'});closeModal();await refresh();toast('Запись удалена');}catch(error){toast(error.message,true);}};
-window.openPresenceModal=()=>{const p=state.data.presence;openModal(`<h2>Текущий статус</h2><p>Статус виден директору на главном экране.</p><form id="presenceForm" class="form-grid"><label class="full">Где вы сейчас<select name="value">${['В офисе','На встрече','В дороге','На складе','Работаю удалённо','Недоступен'].map(x=>option(x,x,p.value)).join('')}</select></label><label class="full">Комментарий<input name="note" value="${esc(p.note)}" maxlength="240"></label><div class="form-actions full"><button type="button" class="button secondary" onclick="closeModal()">Отмена</button><button class="button primary">Обновить</button></div></form>`);$('#presenceForm').addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/presence',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(e.target).entries()))});closeModal();await refresh();toast('Статус обновлён');}catch(error){toast(error.message,true);}});};
+    const token = crypto.randomBytes(32).toString('hex');
+    sessions.set(token, { user: publicUser(user), expiresAt: Date.now() + SESSION_TTL });
+    return sendJson(res, 200, { user: publicUser(user) }, { 'Set-Cookie': `ordo_session=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${SESSION_TTL / 1000}${IS_PRODUCTION ? '; Secure' : ''}` });
+  }
 
-(async()=>{try{await refresh(false);showApp();}catch{showLogin();}})();
+  const session = getSession(req);
+  if (!session) return sendJson(res, 401, { error: 'Необходим вход' });
+
+  if (req.method === 'POST' && url.pathname === '/api/auth/logout') {
+    sessions.delete(session.token);
+    return sendJson(res, 200, { ok: true }, { 'Set-Cookie': 'ordo_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0' });
+  }
+  if (req.method === 'GET' && url.pathname === '/api/bootstrap') {
+    return sendJson(res, 200, {
+      user: session.user, users: db.users.filter(user => user.active).map(publicUser), employees: db.employees,
+      tasks: db.tasks, events: db.events, errands: db.errands, presence: db.presence,
+      audit: canManage(session) ? db.audit.slice(0, 30) : []
+    });
+  }
+
+  const routes = [
+    { base: '/api/tasks', collection: db.tasks, label: 'Задача', prefix: 'task', payload: taskPayload },
+    { base: '/api/events', collection: db.events, label: 'Событие', prefix: 'event', payload: eventPayload },
+    { base: '/api/errands', collection: db.errands, label: 'Поручение', prefix: 'errand', payload: errandPayload }
+  ];
+  for (const route of routes) {
+    if (url.pathname === route.base && req.method === 'POST') {
+      const body = await readBody(req);
+      const item = route.payload(body, { id: uid(route.prefix), creatorId: session.user.id, createdAt: Date.now() });
+      route.collection.push(item); audit(session.user.id, 'create', route.prefix, item.id); saveDatabase();
+      return sendJson(res, 201, item);
+    }
+    if (url.pathname.startsWith(`${route.base}/`)) {
+      const id = decodeURIComponent(url.pathname.slice(route.base.length + 1));
+      const item = findOr404(route.collection, id, route.label);
+      if (req.method === 'PATCH') {
+        const body = await readBody(req);
+        if (!canManage(session) && item.assigneeId !== session.user.id && item.creatorId !== session.user.id) return sendJson(res, 403, { error: 'Недостаточно прав' });
+        Object.assign(item, route.payload({ ...item, ...body }, item), { updatedAt: Date.now() });
+        audit(session.user.id, 'update', route.prefix, id); saveDatabase(); return sendJson(res, 200, item);
+      }
+      if (req.method === 'DELETE') {
+        if (!canManage(session) && item.creatorId !== session.user.id) return sendJson(res, 403, { error: 'Недостаточно прав' });
+        route.collection.splice(route.collection.indexOf(item), 1); audit(session.user.id, 'delete', route.prefix, id); saveDatabase(); return sendJson(res, 200, { ok: true });
+      }
+    }
+  }
+
+  if (url.pathname === '/api/employees' && req.method === 'POST') {
+    if (!canManage(session)) return sendJson(res, 403, { error: 'Только директор может добавлять сотрудников' });
+    const body = await readBody(req); requireFields(body, ['name', 'position']);
+    const employee = { id: uid('emp'), name: clean(body.name), position: clean(body.position), department: clean(body.department), phone: clean(body.phone), email: clean(body.email), status: clean(body.status || 'office') };
+    db.employees.push(employee); audit(session.user.id, 'create', 'employee', employee.id); saveDatabase(); return sendJson(res, 201, employee);
+  }
+  if (url.pathname.startsWith('/api/employees/')) {
+    if (!canManage(session)) return sendJson(res, 403, { error: 'Недостаточно прав' });
+    const id = decodeURIComponent(url.pathname.slice('/api/employees/'.length));
+    const employee = findOr404(db.employees, id, 'Сотрудник');
+    if (req.method === 'PATCH') {
+      const body = await readBody(req);
+      for (const key of ['name', 'position', 'department', 'phone', 'email', 'status']) if (key in body) employee[key] = clean(body[key]);
+      audit(session.user.id, 'update', 'employee', id); saveDatabase(); return sendJson(res, 200, employee);
+    }
+    if (req.method === 'DELETE') {
+      db.employees.splice(db.employees.indexOf(employee), 1); audit(session.user.id, 'delete', 'employee', id); saveDatabase(); return sendJson(res, 200, { ok: true });
+    }
+  }
+  if (url.pathname === '/api/presence' && req.method === 'POST') {
+    if (session.user.role !== 'assistant' && !canManage(session)) return sendJson(res, 403, { error: 'Недостаточно прав' });
+    const body = await readBody(req); requireFields(body, ['value']);
+    db.presence = { userId: 'aman', value: clean(body.value).slice(0, 80), note: clean(body.note).slice(0, 240), updatedAt: Date.now() };
+    audit(session.user.id, 'update', 'presence', 'aman'); saveDatabase(); return sendJson(res, 200, db.presence);
+  }
+  return sendJson(res, 404, { error: 'Маршрут не найден' });
+}
+
+const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
+function serveStatic(req, res, url) {
+  let requestPath = decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname);
+  const filePath = path.resolve(PUBLIC_DIR, `.${requestPath}`);
+  if (!filePath.startsWith(`${path.resolve(PUBLIC_DIR)}${path.sep}`) || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('Страница не найдена');
+  }
+  const cache = path.extname(filePath) === '.html' ? 'no-cache' : 'public, max-age=3600';
+  res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream', 'Cache-Control': cache, 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'same-origin' });
+  fs.createReadStream(filePath).pipe(res);
+}
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  try {
+    if (url.pathname === '/health') return sendJson(res, 200, { status: 'ok', time: new Date().toISOString() });
+    if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
+    return serveStatic(req, res, url);
+  } catch (error) {
+    if (!res.headersSent) sendJson(res, error.status || 500, { error: error.status ? error.message : 'Внутренняя ошибка сервера' });
+    if (!error.status) console.error(error);
+  }
+});
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, session] of sessions) if (session.expiresAt < now) sessions.delete(token);
+}, 60_000).unref();
+
+server.listen(PORT, HOST, () => console.log(`ORDO Manager запущен: http://${HOST}:${PORT}`));
