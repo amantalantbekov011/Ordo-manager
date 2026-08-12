@@ -83,6 +83,14 @@ function migrateDatabase(value) {
   db.products = Array.isArray(db.products) ? db.products : fresh.products;
   db.matrix = db.matrix && typeof db.matrix === 'object' ? db.matrix : {};
   db.matrixHistory = Array.isArray(db.matrixHistory) ? db.matrixHistory : [];
+  db.products.forEach((product, index) => { if (!Number.isFinite(product.order)) product.order = index; });
+  for (const [key, value] of Object.entries(db.matrix)) {
+    if (!value || typeof value !== 'object') db.matrix[key] = { status: 'unchecked', quantity: 0, comment: '', checkedAt: 0, checkedBy: '' };
+    else {
+      if (!['yes', 'no', 'unchecked'].includes(value.status)) value.status = 'unchecked';
+      value.quantity = Math.max(0, Number(value.quantity) || 0); value.comment = clean(value.comment).slice(0, 1000);
+    }
+  }
   db.tasks = Array.isArray(db.tasks) ? db.tasks : [];
   db.events = Array.isArray(db.events) ? db.events : [];
   db.errands = Array.isArray(db.errands) ? db.errands : [];
@@ -357,7 +365,9 @@ function serveStatic(req, res, url) {
   if (!filePath.startsWith(`${path.resolve(PUBLIC_DIR)}${path.sep}`) || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('Страница не найдена');
   }
-  const cache = path.extname(filePath) === '.html' ? 'no-cache' : 'public, max-age=3600';
+  // Entry assets must be revalidated after every deploy. Otherwise a new HTML
+  // navigation item can be paired with an old app.js that does not know its route.
+  const cache = ['.html', '.js', '.css'].includes(path.extname(filePath)) ? 'no-cache, no-store, must-revalidate' : 'public, max-age=3600';
   res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream', 'Cache-Control': cache, 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'same-origin' });
   fs.createReadStream(filePath).pipe(res);
 }

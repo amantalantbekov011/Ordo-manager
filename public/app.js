@@ -30,7 +30,11 @@ function toast(message, error = false) {
   const node = $('#toast'); node.textContent = message; node.className = `toast show${error ? ' error' : ''}`;
   clearTimeout(toast.timer); toast.timer = setTimeout(() => node.className = 'toast', 2600);
 }
-async function refresh(render = true) { state.data = await api('/api/bootstrap'); if (render) renderPage(); }
+async function refresh(render = true) {
+  state.data = await api('/api/bootstrap');
+  state.data.stores ||= []; state.data.products ||= []; state.data.matrix ||= {}; state.data.matrixHistory ||= [];
+  if (render) renderPage();
+}
 function showLogin() { $('#appView').classList.add('hidden'); $('#loginView').classList.remove('hidden'); }
 function showApp() {
   $('#loginView').classList.add('hidden'); $('#appView').classList.remove('hidden');

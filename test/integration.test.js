@@ -49,6 +49,9 @@ test('сервер отдаёт интерфейс и статические р�
   assert.match(css.headers.get('content-type'), /text\/css/);
   assert.equal(js.status, 200);
   assert.match(js.headers.get('content-type'), /javascript/);
+  assert.match(js.headers.get('cache-control'), /no-store/);
+  assert.match(await (await fetch(`${base}/`)).text(), /data-page="stores"/);
+  assert.match(await (await fetch(`${base}/app.js`)).text(), /stores: renderStores/);
 });
 
 test('закрытый API требует авторизацию', async () => {
