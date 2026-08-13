@@ -2,8 +2,9 @@
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
+const pages = new Set(['dashboard', 'tasks', 'calendar', 'meetings', 'errands', 'employees', 'locations', 'stores', 'reports']);
 const requestedPage = new URLSearchParams(location.search).get('view');
-const state = { data: null, page: requestedPage === 'stores' ? 'stores' : 'dashboard', taskFilter: 'all', taskLocation: '', calendarLocation: '', search: '', calendar: new Date(), storeTab: 'matrix', storeFilters: { agent: '', supervisor: '', district: '', product: '', availability: '' } };
+const state = { data: null, page: pages.has(requestedPage) ? requestedPage : 'dashboard', taskFilter: 'all', taskLocation: '', calendarLocation: '', search: '', calendar: new Date(), storeTab: 'matrix', storeFilters: { agent: '', supervisor: '', district: '', product: '', availability: '' } };
 const labels = {
   status: { new: 'Новая', work: 'В работе', wait: 'Ожидает', done: 'Выполнено' },
   priority: { low: 'Низкий', medium: 'Средний', high: 'Высокий' },
@@ -11,7 +12,7 @@ const labels = {
 };
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
-const isoToday = () => new Date().toISOString().slice(0, 10);
+const isoToday = () => localIso(new Date());
 const formatDate = value => value ? new Date(`${value}T00:00:00`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) : '—';
 const formatFullDate = value => value ? new Date(`${value}T00:00:00`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }) : '—';
 const initials = name => String(name || '').split(/\s+/).slice(0, 2).map(x => x[0]).join('').toUpperCase();
@@ -61,9 +62,14 @@ $('#logoutButton').addEventListener('click', async () => { try { await api('/api
 $('#navigation').addEventListener('click', event => {
   const button = event.target.closest('[data-page]'); if (!button) return;
   const page = button.dataset.page;
-  if (button.tagName === 'A') return;
-  state.page = page; $$('#navigation button').forEach(item => item.classList.toggle('active', item === button));
+  state.page = page; history.pushState({ page }, '', page === 'dashboard' ? '/' : `/?view=${page}`);
+  $$('#navigation [data-page]').forEach(item => item.classList.toggle('active', item === button));
   $('#sidebar').classList.remove('open'); renderPage();
+});
+window.addEventListener('popstate', () => {
+  const page = new URLSearchParams(location.search).get('view');
+  state.page = pages.has(page) ? page : 'dashboard';
+  if (state.data) renderPage();
 });
 $('#openSidebar').addEventListener('click', () => $('#sidebar').classList.add('open'));
 $('#closeSidebar').addEventListener('click', () => $('#sidebar').classList.remove('open'));
@@ -126,7 +132,7 @@ function renderErrands() {
 }
 function renderEmployees() {
   const items = state.data.employees.filter(matches); const canEdit = state.data.user.role==='director';
-  $('#pageHost').innerHTML = `${setHead('Сотрудники','Команда, контакты и текущая доступность.',canEdit?button('Добавить сотрудника','employee'):'')}<div class="employee-grid">${items.map(item=>`<article class="employee-card"><div class="employee-card-head"><div class="avatar">${initials(item.name)}</div><div><h3>${esc(item.name)}</h3><p>${esc(item.position)}</p></div><button class="more" style="margin-left:auto" ${canEdit?`onclick="openEntityModal('employee','${item.id}')"`:''}>•••</button></div><div class="employee-info"><span><i class="status-dot ${item.status==='away'?'away':''}"></i> ${item.status==='away'?'Вне офиса':'Доступен'}</span><span>◉ ${esc(item.department||'Не указан')}</span><span>✆ ${esc(item.phone||'Не указан')}</span><span>✉ ${esc(item.email||'Не указан')}</span></div></article>`).join('')}</div>`;
+  $('#pageHost').innerHTML = `${setHead('Сотрудники','Команда, контакты и текущая доступность.',canEdit?button('Добавить сотрудника','employee'):'')}<div class="employee-grid">${items.map(item=>`<article class="employee-card"><div class="employee-card-head"><div class="avatar">${initials(item.name)}</div><div><h3>${esc(item.name)}</h3><p>${esc(item.position)}</p></div>${canEdit?`<button class="more" style="margin-left:auto" aria-label="Редактировать сотрудника" onclick="openEntityModal('employee','${item.id}')">•••</button>`:''}</div><div class="employee-info"><span><i class="status-dot ${item.status==='away'?'away':''}"></i> ${item.status==='away'?'Вне офиса':'Доступен'}</span><span>◉ ${esc(item.department||'Не указан')}</span><span>✆ ${esc(item.phone||'Не указан')}</span><span>✉ ${esc(item.email||'Не указан')}</span></div></article>`).join('')}</div>`;
 }
 function renderLocations() {
   const canEdit=state.data.user.role==='director', tasks=[...state.data.tasks,...state.data.errands];
@@ -179,7 +185,7 @@ function renderPage() {
 }
 function matches(item) { if (!state.search) return true; return Object.values(item).some(value => String(value).toLowerCase().includes(state.search)); }
 function localIso(date) { const y=date.getFullYear(),m=String(date.getMonth()+1).padStart(2,'0'),d=String(date.getDate()).padStart(2,'0'); return `${y}-${m}-${d}`; }
-window.goPage = page => { state.page=page; $$('#navigation [data-page]').forEach(x=>x.classList.toggle('active',x.dataset.page===page)); renderPage(); };
+window.goPage = page => { state.page=page; history.pushState({ page }, '', page === 'dashboard' ? '/' : `/?view=${page}`); $$('#navigation [data-page]').forEach(x=>x.classList.toggle('active',x.dataset.page===page)); renderPage(); };
 window.setTaskFilter = value => { state.taskFilter=value; renderTasks(); };
 window.setTaskLocation = value => { state.taskLocation=value; renderTasks(); };
 window.setCalendarLocation = value => { state.calendarLocation=value; renderCalendar(); };

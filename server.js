@@ -14,7 +14,8 @@ const SESSION_TTL = 1000 * 60 * 60 * 12;
 const BODY_LIMIT = 1024 * 1024;
 const sessions = new Map();
 
-const today = () => new Date().toISOString().slice(0, 10);
+const APP_TIME_ZONE = process.env.APP_TIME_ZONE || 'Asia/Almaty';
+const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: APP_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const uid = prefix => `${prefix}_${crypto.randomBytes(8).toString('hex')}`;
 const clean = value => String(value ?? '').trim();
 const hashPassword = password => {

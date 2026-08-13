@@ -51,10 +51,10 @@ test('сервер отдаёт интерфейс и статические р�
   assert.match(js.headers.get('content-type'), /javascript/);
   assert.match(js.headers.get('cache-control'), /no-store/);
   const currentHtml = await (await fetch(`${base}/`)).text();
-  assert.match(currentHtml, /href="\/\?view=stores" data-page="stores"/);
+  assert.match(currentHtml, /<button data-page="stores">/);
   assert.match(currentHtml, /app\.js\?v=[^"']+/);
   assert.match(await (await fetch(`${base}/app.js`)).text(), /stores: renderStores/);
-  assert.match(await (await fetch(`${base}/app.js`)).text(), /requestedPage === 'stores'/);
+  assert.match(await (await fetch(`${base}/app.js`)).text(), /pages\.has\(requestedPage\)/);
 });
 
 test('закрытый API требует авторизацию', async () => {
