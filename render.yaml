@@ -13,6 +13,8 @@ services:
         value: production
       - key: NODE_VERSION
         value: 22
+      - key: APP_TIME_ZONE
+        value: Asia/Almaty
       - key: DATA_FILE
         value: /var/data/db.json
       - key: DIRECTOR_PASSWORD

@@ -23,13 +23,26 @@
       <h1>Весь рабочий день<br>в одном пространстве.</h1>
       <p>Задачи, встречи, поручения и команда — всегда под контролем.</p>
       <div class="login-features"><span>✓ Единый календарь</span><span>✓ Контроль исполнения</span><span>✓ Адаптировано для телефона</span></div>
+      <div class="landing-plans"><article><b>START</b><span>Руководитель + сотрудник</span></article><article><b>BUSINESS</b><span>Команда, отчёты и торговые точки</span></article><article><b>CORPORATE</b><span>Индивидуальная конфигурация</span></article></div>
     </div>
     <form id="loginForm" class="login-card">
       <div><span class="eyebrow dark">Добро пожаловать</span><h2>Вход в систему</h2><p>Используйте свою рабочую учётную запись.</p></div>
-      <label>Роль для входа<select id="loginUser"><option value="director">Эрлан Атанбекович — Генеральный директор</option><option value="aman">Аман Талантбекович — Ассистент генерального директора</option></select></label>
+      <label>E-mail<input id="loginUser" type="email" value="director@ordo.local" required autocomplete="username" placeholder="name@company.com"></label>
       <label>Пароль<div class="password-field"><input id="loginPassword" type="password" value="1234" required autocomplete="current-password"><button type="button" id="togglePassword" aria-label="Показать пароль">👁</button></div></label>
       <button class="button primary wide" type="submit"><span>Войти</span><span>→</span></button>
-      <small>Демо-пароль: 1234</small>
+      <button class="button secondary wide" type="button" id="showRegister"><span>Создать компанию</span><span>＋</span></button>
+      <small>ОРДО Трейд: director@ordo.local · пароль 1234</small>
+    </form>
+    <form id="registerForm" class="login-card hidden">
+      <div><span class="eyebrow dark">Новый аккаунт</span><h2>Создать компанию</h2><p>Данные компании будут изолированы от других организаций.</p></div>
+      <label>Название компании<input name="companyName" required maxlength="160"></label>
+      <label>ФИО руководителя<input name="name" required maxlength="160"></label>
+      <label>Телефон<input name="phone" required maxlength="80"></label>
+      <label>E-mail<input name="email" type="email" required autocomplete="email"></label>
+      <label>Пароль<input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
+      <label>Подтверждение пароля<input name="passwordConfirm" type="password" required minlength="8" autocomplete="new-password"></label>
+      <button class="button primary wide" type="submit"><span>Создать компанию</span><span>→</span></button>
+      <button class="button secondary wide" type="button" id="showLogin">Вернуться ко входу</button>
     </form>
   </section>
 
@@ -54,7 +67,7 @@
       <header class="topbar">
         <button id="openSidebar" class="icon-button mobile-only">☰</button>
         <div class="global-search"><span>⌕</span><input id="globalSearch" placeholder="Поиск по задачам и встречам…"><kbd>Ctrl K</kbd></div>
-        <div class="top-actions"><button id="quickAdd" class="button primary"><span>＋</span><span class="desktop-label">Создать</span></button><button id="notificationButton" class="icon-button notification" title="Уведомления" aria-label="Уведомления">♢<i></i></button><div id="topAvatar" class="avatar small">АТ</div></div>
+        <div class="top-actions"><button id="quickAdd" class="button primary"><span>＋</span><span class="desktop-label">Создать</span></button><button id="notificationButton" class="icon-button notification" title="Уведомления" aria-label="Уведомления">♢<i></i></button><button id="accountButton" class="icon-button" title="Настройки аккаунта" aria-label="Настройки аккаунта">⚙</button><div id="topAvatar" class="avatar small">АТ</div></div>
       </header>
       <div id="pageHost" class="page-host"></div>
     </main>

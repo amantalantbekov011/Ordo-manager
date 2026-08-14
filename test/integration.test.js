@@ -100,6 +100,24 @@ test('создание встречи, поручения и сотрудник�
   assert.deepEqual(meeting.value.participants.sort(), ['aman', 'director']);
 });
 
+test('регистрация компании и жёсткая изоляция арендаторов', async () => {
+  const registration = await fetch(`${base}/api/auth/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyName: 'Изолированная компания', name: 'Тестовый Руководитель', phone: '+996 700 000 000', email: 'tenant@example.com', password: 'Secure123!', passwordConfirm: 'Secure123!' }) });
+  assert.equal(registration.status, 201);
+  const login = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'tenant@example.com', password: 'Secure123!' }) });
+  assert.equal(login.status, 200); const tenantCookie = login.headers.get('set-cookie').split(';')[0];
+  const tenantData = await (await fetch(`${base}/api/bootstrap`, { headers: { Cookie: tenantCookie } })).json();
+  assert.equal(tenantData.company.name, 'Изолированная компания');
+  assert.equal(tenantData.users.length, 1); assert.equal(tenantData.tasks.length, 0); assert.equal(tenantData.stores.length, 0); assert.equal(tenantData.locations.length, 1);
+  const foreignTask = await fetch(`${base}/api/tasks/task_1`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Cookie: tenantCookie }, body: JSON.stringify({ status: 'done' }) });
+  const foreignStore = await fetch(`${base}/api/stores/store_1`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Cookie: tenantCookie }, body: JSON.stringify({ note: 'Попытка доступа' }) });
+  assert.equal(foreignTask.status, 404); assert.equal(foreignStore.status, 404);
+  const created = await fetch(`${base}/api/tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: tenantCookie }, body: JSON.stringify({ title: 'Своя задача', date: '2026-08-20', assigneeId: tenantData.user.id }) });
+  assert.equal(created.status, 201);
+  const directorData = await request('/api/bootstrap');
+  assert.equal(directorData.value.tasks.some(item => item.title === 'Своя задача'), false);
+  assert.equal(directorData.value.users.some(item => item.email === 'tenant@example.com'), false);
+});
+
 test('поручение директора синхронизируется с кабинетом ассистента', async () => {
   const directorCookie = cookie;
   const created = await request('/api/errands', { method: 'POST', body: JSON.stringify({ title: 'Поручение от Эрлана', description: 'Сквозной тест двух кабинетов', date: '2026-08-14', assigneeId: 'aman', status: 'new' }) });
@@ -113,6 +131,7 @@ test('поручение директора синхронизируется с 
   cookie = assistantLogin.response.headers.get('set-cookie').split(';')[0];
   const assistantData = await request('/api/bootstrap');
   assert.ok(assistantData.value.errands.some(item => item.id === created.value.id));
+  assert.ok(assistantData.value.notifications.some(item => item.entityId === created.value.id && item.type === 'assignment'));
   assert.deepEqual(assistantData.value.audit, []);
 
   const completed = await request(`/api/errands/${created.value.id}`, { method: 'PATCH', body: JSON.stringify({ status: 'done' }) });
@@ -125,6 +144,7 @@ test('поручение директора синхронизируется с 
   assert.equal(directorData.value.errands.find(item => item.id === created.value.id).status, 'done');
   assert.ok(directorData.value.errands.some(item => item.id === verbal.value.id));
   assert.ok(directorData.value.audit.some(item => item.entityId === created.value.id && item.action === 'update'));
+  assert.ok(directorData.value.notifications.some(item => item.entityId === created.value.id && item.type === 'status'));
 });
 
 test('роли изолированы, а сервер проверяет связанные данные', async () => {
@@ -158,6 +178,10 @@ test('комментарий о результате сохраняется по
   assert.equal(changed.value.resultComment, 'Документы переданы директору');
   const reloaded = await request('/api/bootstrap');
   assert.equal(reloaded.value.tasks.find(item => item.id === created.value.id).resultComment, 'Документы переданы директору');
+  const comment = await request(`/api/tasks/${created.value.id}/comments`, { method: 'POST', body: JSON.stringify({ text: 'Комментарий сохранён отдельно' }) });
+  assert.equal(comment.response.status, 201);
+  const withComment = await request('/api/bootstrap');
+  assert.equal(withComment.value.tasks.find(item => item.id === created.value.id).comments[0].text, 'Комментарий сохранён отдельно');
 });
 
 test('матрица продукции: магазин, продукт, статусы, история и задача', async () => {
@@ -221,6 +245,7 @@ test('данные сохраняются после полного переза
   response=await fetch(`${restartBase}/api/stores`,{method:'POST',headers:{'Content-Type':'application/json',Cookie:restartCookie},body:JSON.stringify({name:'Переживает перезапуск',address:'Постоянный адрес'})});
   const savedStore=await response.json(); assert.equal(response.status,201);
   child.kill(); await new Promise(resolve=>child.once('exit',resolve)); child=await start();
+  response=await fetch(`${restartBase}/api/bootstrap`,{headers:{Cookie:restartCookie}}); assert.equal(response.status,200);
   response=await fetch(`${restartBase}/api/auth/login`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId:'director',password:'1234'}) });
   const secondCookie=response.headers.get('set-cookie').split(';')[0];
   response=await fetch(`${restartBase}/api/bootstrap`,{headers:{Cookie:secondCookie}}); const persisted=await response.json();

@@ -1,6 +1,6 @@
 {
   "name": "ordo-manager",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
   "description": "Корпоративный портал планирования и контроля ORDO",
   "main": "server.js",

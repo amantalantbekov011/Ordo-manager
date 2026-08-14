@@ -30,6 +30,16 @@
 .navigation a b { font-size:13px; }
 .navigation a:hover,.navigation a.active { color:#fff; background:rgba(196,163,105,.12); }
 .navigation a.active:before { content:""; position:absolute; left:-16px; height:25px; width:3px; border-radius:0 3px 3px 0; background:#d2a958; }
+
+.landing-plans { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:26px; max-width:720px; }
+.landing-plans article { display:grid; gap:5px; padding:14px; border:1px solid #ffffff24; border-radius:14px; background:#ffffff0a; }
+.landing-plans b { color:#e6c47d; font-size:10px; letter-spacing:.12em; }
+.landing-plans span { color:#c3d1dc; font-size:9px; line-height:1.4; }
+.badge.urgent { background:#f4eaff; color:#7b3fc6; }
+
+@media(max-width:820px){.landing-plans{display:none}}
+.calendar-grid.day,.calendar-week.day{grid-template-columns:1fr}.calendar-grid.week,.calendar-week.week{grid-template-columns:repeat(7,1fr)}
+.calendar-grid.day .calendar-day{min-height:360px}.calendar-grid.week .calendar-day{min-height:220px}
 .topbar { background: rgba(255, 255, 255, .92); backdrop-filter: blur(14px); }
 
 .report-bars, .audit-list { display: grid; gap: 16px; }
