@@ -9,9 +9,13 @@ const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data', 'db.json');
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(path.dirname(DATA_FILE), 'uploads');
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const SESSION_TTL = 1000 * 60 * 60 * 12;
-const BODY_LIMIT = 1024 * 1024;
+const BODY_LIMIT = 6 * 1024 * 1024;
+const FILE_LIMIT = 4 * 1024 * 1024;
+const ALLOWED_UPLOADS = new Map([['application/pdf','.pdf'],['image/png','.png'],['image/jpeg','.jpg'],['image/webp','.webp'],['application/vnd.openxmlformats-officedocument.wordprocessingml.document','.docx'],['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','.xlsx']]);
+const validFileSignature = (mime, bytes) => mime === 'application/pdf' ? bytes.subarray(0,4).toString() === '%PDF' : mime === 'image/png' ? bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])) : mime === 'image/jpeg' ? bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 : mime === 'image/webp' ? bytes.subarray(0,4).toString() === 'RIFF' && bytes.subarray(8,12).toString() === 'WEBP' : bytes[0] === 80 && bytes[1] === 75;
 const sessions = new Map();
 const authAttempts = new Map();
 
@@ -135,6 +139,7 @@ function migrateDatabase(value) {
 }
 
 fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 let db;
 try {
   if (fs.existsSync(DATA_FILE)) {
@@ -312,6 +317,26 @@ async function handleApi(req, res, url) {
   const session = getSession(req);
   if (!session) return sendJson(res, 401, { error: 'Необходим вход' });
 
+  if (url.pathname.startsWith('/api/attachments/')) {
+    const id = decodeURIComponent(url.pathname.slice('/api/attachments/'.length));
+    let parent, attachment;
+    for (const collection of [db.tasks, db.events, db.errands]) {
+      parent = collection.find(item => item.companyId === session.user.companyId && item.attachments?.some(file => file.id === id));
+      if (parent) { attachment = parent.attachments.find(file => file.id === id); break; }
+    }
+    if (!parent || !attachment || !visibleTo(session, parent)) return sendJson(res, 404, { error: 'Вложение не найдено' });
+    const filePath = path.join(UPLOAD_DIR, attachment.storageName);
+    if (!fs.existsSync(filePath)) return sendJson(res, 404, { error: 'Файл отсутствует в хранилище' });
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': attachment.mime, 'Content-Length': attachment.size, 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(attachment.name)}`, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
+      return fs.createReadStream(filePath).pipe(res);
+    }
+    if (req.method === 'DELETE') {
+      if (!canManage(session) && attachment.userId !== session.user.id && parent.creatorId !== session.user.id) return sendJson(res, 403, { error: 'Недостаточно прав' });
+      parent.attachments.splice(parent.attachments.indexOf(attachment), 1); fs.unlinkSync(filePath); audit(session.user.id, 'delete', 'attachment', id); saveDatabase(); return sendJson(res, 200, { ok: true });
+    }
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/auth/logout') {
     sessions.delete(session.token);
     db.sessions = db.sessions.filter(item => item.tokenHash !== hashToken(session.token)); saveDatabase();
@@ -320,7 +345,7 @@ async function handleApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/bootstrap') {
     const companyId = session.user.companyId;
     const companyItems = collection => collection.filter(item => item.companyId === companyId);
-    const visible = collection => collection.filter(item => visibleTo(session, item));
+    const visible = collection => collection.filter(item => visibleTo(session, item)).map(item => ({ ...item, attachments: (item.attachments || []).map(({ storageName, ...file }) => file) }));
     const company = db.companies.find(item => item.id === companyId);
     const companyStores = companyItems(db.stores), storeIds = new Set(companyStores.map(item => item.id));
     const companyProducts = companyItems(db.products), productIds = new Set(companyProducts.map(item => item.id));
@@ -426,6 +451,21 @@ async function handleApi(req, res, url) {
     { base: '/api/errands', collection: db.errands, label: 'Поручение', prefix: 'errand', payload: errandPayload }
   ];
   for (const route of routes) {
+    if (req.method === 'POST' && url.pathname.startsWith(`${route.base}/`) && url.pathname.endsWith('/attachments')) {
+      const id = decodeURIComponent(url.pathname.slice(route.base.length + 1, -'/attachments'.length));
+      const item = findCompanyOr404(route.collection, id, session, route.label);
+      if (!visibleTo(session, item)) return sendJson(res, 403, { error: 'Недостаточно прав' });
+      const body = await readBody(req), mime = clean(body.mime), extension = ALLOWED_UPLOADS.get(mime), name = path.basename(clean(body.name)).slice(0, 180);
+      if (!extension || !name || typeof body.data !== 'string') return sendJson(res, 400, { error: 'Недопустимый формат файла' });
+      let bytes; try { bytes = Buffer.from(body.data, 'base64'); } catch { return sendJson(res, 400, { error: 'Файл повреждён' }); }
+      if (!bytes.length || bytes.length > FILE_LIMIT) return sendJson(res, 413, { error: 'Размер файла должен быть не более 4 МБ' });
+      if (!validFileSignature(mime, bytes)) return sendJson(res, 400, { error: 'Содержимое файла не соответствует заявленному формату' });
+      const attachmentId = uid('attachment'), storageName = `${session.user.companyId}-${attachmentId}${extension}`;
+      fs.writeFileSync(path.join(UPLOAD_DIR, storageName), bytes, { flag: 'wx' }); item.attachments ||= [];
+      const attachment = { id: attachmentId, name, mime, size: bytes.length, storageName, userId: session.user.id, createdAt: Date.now() };
+      item.attachments.push(attachment); audit(session.user.id, 'create', 'attachment', attachmentId); saveDatabase();
+      return sendJson(res, 201, { ...attachment, storageName: undefined });
+    }
     if (req.method === 'POST' && url.pathname.startsWith(`${route.base}/`) && url.pathname.endsWith('/comments')) {
       const id = decodeURIComponent(url.pathname.slice(route.base.length + 1, -'/comments'.length));
       const item = findCompanyOr404(route.collection, id, session, route.label);

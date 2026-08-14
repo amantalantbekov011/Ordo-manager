@@ -184,6 +184,20 @@ test('комментарий о результате сохраняется по
   assert.equal(withComment.value.tasks.find(item => item.id === created.value.id).comments[0].text, 'Комментарий сохранён отдельно');
 });
 
+test('вложения защищены авторизацией, компанией и проверкой формата', async () => {
+  const created = await request('/api/tasks', { method: 'POST', body: JSON.stringify({ title: 'Задача с файлом', date: '2026-08-16', assigneeId: 'aman' }) });
+  const pdf = Buffer.from('%PDF-1.4\n1 0 obj\n%%EOF').toString('base64');
+  const uploaded = await request(`/api/tasks/${created.value.id}/attachments`, { method: 'POST', body: JSON.stringify({ name: '../отчёт.pdf', mime: 'application/pdf', data: pdf }) });
+  assert.equal(uploaded.response.status, 201); assert.equal(uploaded.value.name, 'отчёт.pdf'); assert.equal('storageName' in uploaded.value, false);
+  const reloaded = await request('/api/bootstrap'), attachment = reloaded.value.tasks.find(item => item.id === created.value.id).attachments[0];
+  assert.equal(attachment.name, 'отчёт.pdf'); assert.equal('storageName' in attachment, false);
+  const downloaded = await fetch(`${base}/api/attachments/${attachment.id}`, { headers: { Cookie: cookie } });
+  assert.equal(downloaded.status, 200); assert.match(downloaded.headers.get('content-type'), /application\/pdf/);
+  const fake = await request(`/api/tasks/${created.value.id}/attachments`, { method: 'POST', body: JSON.stringify({ name: 'fake.png', mime: 'image/png', data: Buffer.from('not an image').toString('base64') }) });
+  assert.equal(fake.response.status, 400);
+  const anonymous = await fetch(`${base}/api/attachments/${attachment.id}`); assert.equal(anonymous.status, 401);
+});
+
 test('матрица продукции: магазин, продукт, статусы, история и задача', async () => {
   const store = await request('/api/stores', { method: 'POST', body: JSON.stringify({ name: 'Тестовый Globus', address: 'ул. Тестовая, 1', district: 'Центр', agent: 'Тест Агент', supervisor: 'Тест Супервайзер' }) });
   const product = await request('/api/products', { method: 'POST', body: JSON.stringify({ name: 'Тестовый продукт', category: 'Напитки', variant: 'Яблоко' }) });

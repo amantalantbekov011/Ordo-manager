@@ -17,6 +17,8 @@ services:
         value: Asia/Almaty
       - key: DATA_FILE
         value: /var/data/db.json
+      - key: UPLOAD_DIR
+        value: /var/data/uploads
       - key: DIRECTOR_PASSWORD
         sync: false
       - key: ASSISTANT_PASSWORD

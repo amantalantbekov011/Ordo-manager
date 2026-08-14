@@ -40,6 +40,7 @@
 @media(max-width:820px){.landing-plans{display:none}}
 .calendar-grid.day,.calendar-week.day{grid-template-columns:1fr}.calendar-grid.week,.calendar-week.week{grid-template-columns:repeat(7,1fr)}
 .calendar-grid.day .calendar-day{min-height:360px}.calendar-grid.week .calendar-day{min-height:220px}
+.attachment-list{display:grid;gap:7px}.attachment-list>div{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 11px;border:1px solid var(--line);border-radius:9px}.attachment-list a{color:var(--blue);font-size:10px;text-decoration:none;overflow-wrap:anywhere}
 .topbar { background: rgba(255, 255, 255, .92); backdrop-filter: blur(14px); }
 
 .report-bars, .audit-list { display: grid; gap: 16px; }
