@@ -4,11 +4,13 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { createStorage } = require('./storage');
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data', 'db.json');
+const DATABASE_URL = process.env.DATABASE_URL || '';
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(path.dirname(DATA_FILE), 'uploads');
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const SESSION_TTL = 1000 * 60 * 60 * 12;
@@ -44,7 +46,7 @@ function seedDatabase() {
   const previousDate = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
   const companyId = 'company_ordo';
   return {
-    version: 3,
+    version: 4,
     companies: [
       { id: companyId, name: 'ОРДО Трейд', slug: 'ordo-trade', plan: 'business', status: 'active', phone: '', email: 'director@ordo.local', createdAt: Date.now() }
     ],
@@ -97,7 +99,7 @@ function migrateDatabase(value) {
   const fresh = seedDatabase();
   const db = value && typeof value === 'object' ? value : fresh;
   const legacyCompanyId = 'company_ordo';
-  db.version = 3;
+  db.version = 4;
   db.companies = Array.isArray(db.companies) && db.companies.length ? db.companies : fresh.companies;
   db.users = Array.isArray(db.users) ? db.users : fresh.users;
   db.employees = Array.isArray(db.employees) ? db.employees : fresh.employees;
@@ -140,6 +142,7 @@ function migrateDatabase(value) {
 
 fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+const storage = createStorage({ databaseUrl: DATABASE_URL, dataFile: DATA_FILE });
 let db;
 try {
   if (fs.existsSync(DATA_FILE)) {
@@ -153,12 +156,27 @@ try {
   db = seedDatabase();
 }
 
-function saveDatabase() {
-  const temporary = `${DATA_FILE}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify(db, null, 2), 'utf8');
-  fs.renameSync(temporary, DATA_FILE);
+function applyAutomaticTimestamps(database) {
+  const now = Date.now();
+  const collections = ['companies', 'users', 'employees', 'locations', 'stores', 'products', 'matrixHistory', 'tasks', 'events', 'errands', 'notifications', 'audit'];
+  for (const name of collections) for (const item of database[name] || []) {
+    item.createdAt ||= item.at || now;
+    item.updatedAt ||= item.createdAt;
+    for (const child of [...(item.comments || []), ...(item.attachments || [])]) {
+      child.createdAt ||= now;
+      child.updatedAt ||= child.createdAt;
+    }
+  }
+  for (const value of Object.values(database.matrix || {})) {
+    value.createdAt ||= value.checkedAt || now;
+    value.updatedAt ||= value.checkedAt || value.createdAt;
+  }
 }
-saveDatabase();
+
+async function saveDatabase() {
+  applyAutomaticTimestamps(db);
+  await storage.save(db);
+}
 
 function publicUser(user) {
   return { id: user.id, companyId: user.companyId, name: user.name, role: user.role, title: user.title, email: user.email };
@@ -293,7 +311,7 @@ async function handleApi(req, res, url) {
     const user = { id: userId, companyId, name: clean(body.name).slice(0, 160), role: 'director', title: 'Руководитель / Администратор', email, phone: clean(body.phone).slice(0, 80), passwordHash: hashPassword(String(body.password)), active: true, createdAt: Date.now() };
     db.companies.push(company); db.users.push(user);
     db.locations.push({ id: uid('location'), companyId, name: 'Головной офис', type: 'head_office', address: '', responsible: user.name, phone: user.phone, note: '', status: 'active', createdAt: Date.now() });
-    audit(userId, 'create', 'company', companyId); saveDatabase();
+    audit(userId, 'create', 'company', companyId); await saveDatabase();
     return sendJson(res, 201, { ok: true, company: { id: company.id, name: company.name }, user: publicUser(user) });
   }
   if (req.method === 'POST' && url.pathname === '/api/auth/login') {
@@ -310,7 +328,7 @@ async function handleApi(req, res, url) {
     const token = crypto.randomBytes(32).toString('hex');
     sessions.set(token, { user: publicUser(user), expiresAt: Date.now() + SESSION_TTL });
     db.sessions.push({ tokenHash: hashToken(token), userId: user.id, companyId: user.companyId, expiresAt: Date.now() + SESSION_TTL, createdAt: Date.now() });
-    db.sessions = db.sessions.slice(-5000); saveDatabase();
+    db.sessions = db.sessions.slice(-5000); await saveDatabase();
     return sendJson(res, 200, { user: publicUser(user) }, { 'Set-Cookie': `ordo_session=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${SESSION_TTL / 1000}${IS_PRODUCTION ? '; Secure' : ''}` });
   }
 
@@ -333,13 +351,13 @@ async function handleApi(req, res, url) {
     }
     if (req.method === 'DELETE') {
       if (!canManage(session) && attachment.userId !== session.user.id && parent.creatorId !== session.user.id) return sendJson(res, 403, { error: 'Недостаточно прав' });
-      parent.attachments.splice(parent.attachments.indexOf(attachment), 1); fs.unlinkSync(filePath); audit(session.user.id, 'delete', 'attachment', id); saveDatabase(); return sendJson(res, 200, { ok: true });
+      parent.attachments.splice(parent.attachments.indexOf(attachment), 1); fs.unlinkSync(filePath); audit(session.user.id, 'delete', 'attachment', id); await saveDatabase(); return sendJson(res, 200, { ok: true });
     }
   }
 
   if (req.method === 'POST' && url.pathname === '/api/auth/logout') {
     sessions.delete(session.token);
-    db.sessions = db.sessions.filter(item => item.tokenHash !== hashToken(session.token)); saveDatabase();
+    db.sessions = db.sessions.filter(item => item.tokenHash !== hashToken(session.token)); await saveDatabase();
     return sendJson(res, 200, { ok: true }, { 'Set-Cookie': 'ordo_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0' });
   }
   if (req.method === 'GET' && url.pathname === '/api/bootstrap') {
@@ -367,12 +385,12 @@ async function handleApi(req, res, url) {
     user.passwordHash = hashPassword(String(body.newPassword)); user.passwordChangedAt = Date.now();
     for (const [token, value] of sessions) if (value.user.id === user.id && token !== session.token) sessions.delete(token);
     db.sessions = db.sessions.filter(item => item.userId !== user.id || item.tokenHash === hashToken(session.token));
-    audit(user.id, 'update', 'password', user.id); saveDatabase(); return sendJson(res, 200, { ok: true });
+    user.updatedAt = Date.now(); audit(user.id, 'update', 'password', user.id); await saveDatabase(); return sendJson(res, 200, { ok: true });
   }
   if (req.method === 'POST' && url.pathname === '/api/notifications/read') {
     const body = await readBody(req);
     for (const item of db.notifications) if (item.companyId === session.user.companyId && (!body.id || item.id === body.id) && (!item.userId || item.userId === session.user.id)) item.read = true;
-    saveDatabase(); return sendJson(res, 200, { ok: true });
+    await saveDatabase(); return sendJson(res, 200, { ok: true });
   }
 
   if (url.pathname === '/api/locations' && req.method === 'POST') {
@@ -380,7 +398,7 @@ async function handleApi(req, res, url) {
     const body = await readBody(req); requireFields(body, ['name', 'type']);
     if (!['head_office', 'office', 'warehouse', 'branch'].includes(body.type)) return sendJson(res, 400, { error: 'Некорректный тип объекта' });
     const location = { id: uid('location'), companyId: session.user.companyId, name: clean(body.name).slice(0, 160), type: body.type, address: clean(body.address).slice(0, 240), responsible: clean(body.responsible).slice(0, 160), phone: clean(body.phone).slice(0, 80), note: clean(body.note).slice(0, 1000), status: body.status === 'inactive' ? 'inactive' : 'active', createdAt: Date.now() };
-    db.locations.push(location); audit(session.user.id, 'create', 'location', location.id); saveDatabase(); return sendJson(res, 201, location);
+    db.locations.push(location); audit(session.user.id, 'create', 'location', location.id); await saveDatabase(); return sendJson(res, 201, location);
   }
   if (url.pathname.startsWith('/api/locations/')) {
     if (!canManage(session)) return sendJson(res, 403, { error: 'Только директор может изменять объекты' });
@@ -388,14 +406,14 @@ async function handleApi(req, res, url) {
     if (req.method === 'PATCH') {
       const body = await readBody(req); for (const key of ['name','address','responsible','phone','note']) if (key in body) location[key]=clean(body[key]).slice(0,key==='note'?1000:240);
       if (body.type && ['head_office','office','warehouse','branch'].includes(body.type)) location.type=body.type; if (body.status && ['active','inactive'].includes(body.status)) location.status=body.status;
-      location.updatedAt=Date.now(); audit(session.user.id,'update','location',id); saveDatabase(); return sendJson(res,200,location);
+      location.updatedAt=Date.now(); audit(session.user.id,'update','location',id); await saveDatabase(); return sendJson(res,200,location);
     }
   }
 
   if (url.pathname === '/api/stores' && req.method === 'POST') {
     const body = await readBody(req); requireFields(body, ['name', 'address']);
     const store = { id: uid('store'), companyId: session.user.companyId, name: clean(body.name).slice(0, 160), address: clean(body.address).slice(0, 240), district: clean(body.district).slice(0, 100), agent: clean(body.agent).slice(0, 160), supervisor: clean(body.supervisor).slice(0, 160), phone: clean(body.phone).slice(0, 80), note: clean(body.note).slice(0, 1000), createdAt: Date.now() };
-    db.stores.push(store); audit(session.user.id, 'create', 'store', store.id); saveDatabase(); return sendJson(res, 201, store);
+    db.stores.push(store); audit(session.user.id, 'create', 'store', store.id); await saveDatabase(); return sendJson(res, 201, store);
   }
   if (url.pathname.startsWith('/api/stores/')) {
     const id = decodeURIComponent(url.pathname.slice('/api/stores/'.length));
@@ -403,19 +421,19 @@ async function handleApi(req, res, url) {
     if (req.method === 'PATCH') {
       const body = await readBody(req); requireFields({ ...store, ...body }, ['name', 'address']);
       for (const key of ['name', 'address', 'district', 'agent', 'supervisor', 'phone', 'note']) if (key in body) store[key] = clean(body[key]).slice(0, key === 'note' ? 1000 : 240);
-      store.updatedAt = Date.now(); audit(session.user.id, 'update', 'store', id); saveDatabase(); return sendJson(res, 200, store);
+      store.updatedAt = Date.now(); audit(session.user.id, 'update', 'store', id); await saveDatabase(); return sendJson(res, 200, store);
     }
     if (req.method === 'DELETE') {
       if (!canManage(session)) return sendJson(res, 403, { error: 'Только директор может удалять торговые точки' });
       db.stores.splice(db.stores.indexOf(store), 1); for (const key of Object.keys(db.matrix)) if (key.startsWith(`${id}:`)) delete db.matrix[key];
-      audit(session.user.id, 'delete', 'store', id); saveDatabase(); return sendJson(res, 200, { ok: true });
+      audit(session.user.id, 'delete', 'store', id); await saveDatabase(); return sendJson(res, 200, { ok: true });
     }
   }
   if (url.pathname === '/api/products' && req.method === 'POST') {
     if (!canManage(session)) return sendJson(res, 403, { error: 'Только директор может управлять продукцией' });
     const body = await readBody(req); requireFields(body, ['name']);
     const product = { id: uid('product'), companyId: session.user.companyId, name: clean(body.name).slice(0, 160), category: clean(body.category).slice(0, 100), variant: clean(body.variant).slice(0, 100), note: clean(body.note).slice(0, 1000), order: db.products.filter(item => item.companyId === session.user.companyId).length, createdAt: Date.now() };
-    db.products.push(product); audit(session.user.id, 'create', 'product', product.id); saveDatabase(); return sendJson(res, 201, product);
+    db.products.push(product); audit(session.user.id, 'create', 'product', product.id); await saveDatabase(); return sendJson(res, 201, product);
   }
   if (url.pathname.startsWith('/api/products/') && url.pathname !== '/api/products/reorder') {
     if (!canManage(session)) return sendJson(res, 403, { error: 'Только директор может управлять продукцией' });
@@ -423,17 +441,17 @@ async function handleApi(req, res, url) {
     if (req.method === 'PATCH') {
       const body = await readBody(req); for (const key of ['name', 'category', 'variant', 'note']) if (key in body) product[key] = clean(body[key]).slice(0, key === 'note' ? 1000 : 160);
       if (Number.isInteger(Number(body.order))) product.order = Math.max(0, Number(body.order));
-      audit(session.user.id, 'update', 'product', id); saveDatabase(); return sendJson(res, 200, product);
+      product.updatedAt = Date.now(); audit(session.user.id, 'update', 'product', id); await saveDatabase(); return sendJson(res, 200, product);
     }
     if (req.method === 'DELETE') {
       db.products.splice(db.products.indexOf(product), 1); for (const key of Object.keys(db.matrix)) if (key.endsWith(`:${id}`)) delete db.matrix[key];
-      audit(session.user.id, 'delete', 'product', id); saveDatabase(); return sendJson(res, 200, { ok: true });
+      audit(session.user.id, 'delete', 'product', id); await saveDatabase(); return sendJson(res, 200, { ok: true });
     }
   }
   if (url.pathname === '/api/products/reorder' && req.method === 'POST') {
     if (!canManage(session)) return sendJson(res, 403, { error: 'Недостаточно прав' });
     const body = await readBody(req); if (!Array.isArray(body.ids)) return sendJson(res, 400, { error: 'Некорректный порядок' });
-    body.ids.forEach((id, index) => { const product = db.products.find(item => item.id === id && item.companyId === session.user.companyId); if (product) product.order = index; }); saveDatabase(); return sendJson(res, 200, { ok: true });
+    body.ids.forEach((id, index) => { const product = db.products.find(item => item.id === id && item.companyId === session.user.companyId); if (product) { product.order = index; product.updatedAt = Date.now(); } }); await saveDatabase(); return sendJson(res, 200, { ok: true });
   }
   if (url.pathname === '/api/matrix' && req.method === 'POST') {
     const body = await readBody(req); requireFields(body, ['storeId', 'productId', 'status']);
@@ -442,7 +460,7 @@ async function handleApi(req, res, url) {
     const key = `${clean(body.storeId)}:${clean(body.productId)}`, previous = db.matrix[key] || { status: 'unchecked' };
     const value = { status: body.status, quantity: Math.max(0, Number(body.quantity) || 0), checkedAt: Date.now(), comment: clean(body.comment).slice(0, 1000), checkedBy: session.user.id };
     db.matrix[key] = value; db.matrixHistory.unshift({ id: uid('history'), companyId: session.user.companyId, storeId: clean(body.storeId), productId: clean(body.productId), oldStatus: previous.status, newStatus: value.status, quantity: value.quantity, comment: value.comment, userId: session.user.id, at: Date.now() }); db.matrixHistory = db.matrixHistory.slice(0, 2000);
-    audit(session.user.id, 'update', 'matrix', key); saveDatabase(); return sendJson(res, 200, value);
+    audit(session.user.id, 'update', 'matrix', key); await saveDatabase(); return sendJson(res, 200, value);
   }
 
   const routes = [
@@ -463,7 +481,7 @@ async function handleApi(req, res, url) {
       const attachmentId = uid('attachment'), storageName = `${session.user.companyId}-${attachmentId}${extension}`;
       fs.writeFileSync(path.join(UPLOAD_DIR, storageName), bytes, { flag: 'wx' }); item.attachments ||= [];
       const attachment = { id: attachmentId, name, mime, size: bytes.length, storageName, userId: session.user.id, createdAt: Date.now() };
-      item.attachments.push(attachment); audit(session.user.id, 'create', 'attachment', attachmentId); saveDatabase();
+      item.attachments.push(attachment); item.updatedAt = Date.now(); audit(session.user.id, 'create', 'attachment', attachmentId); await saveDatabase();
       return sendJson(res, 201, { ...attachment, storageName: undefined });
     }
     if (req.method === 'POST' && url.pathname.startsWith(`${route.base}/`) && url.pathname.endsWith('/comments')) {
@@ -472,14 +490,14 @@ async function handleApi(req, res, url) {
       if (!visibleTo(session, item)) return sendJson(res, 403, { error: 'Недостаточно прав' });
       const body = await readBody(req); requireFields(body, ['text']); item.comments ||= [];
       const comment = { id: uid('comment'), userId: session.user.id, text: clean(body.text).slice(0, 2000), createdAt: Date.now() };
-      item.comments.push(comment); audit(session.user.id, 'comment', route.prefix, id); saveDatabase(); return sendJson(res, 201, comment);
+      item.comments.push(comment); item.updatedAt = Date.now(); audit(session.user.id, 'comment', route.prefix, id); await saveDatabase(); return sendJson(res, 201, comment);
     }
     if (url.pathname === route.base && req.method === 'POST') {
       const body = await readBody(req);
       const item = route.payload(body, { id: uid(route.prefix), companyId: session.user.companyId, creatorId: session.user.id, comments: [], attachments: [], createdAt: Date.now() });
       route.collection.push(item); audit(session.user.id, 'create', route.prefix, item.id);
       if (item.assigneeId && item.assigneeId !== session.user.id) notify(session.user.companyId, item.assigneeId, 'assignment', 'Новая задача', item.title, item.id);
-      saveDatabase();
+      await saveDatabase();
       return sendJson(res, 201, item);
     }
     if (url.pathname.startsWith(`${route.base}/`)) {
@@ -492,11 +510,11 @@ async function handleApi(req, res, url) {
         const oldStatus = item.status; Object.assign(item, route.payload({ ...item, ...body }, item), { updatedAt: Date.now() });
         audit(session.user.id, 'update', route.prefix, id);
         if (oldStatus && oldStatus !== item.status) notify(session.user.companyId, item.creatorId, 'status', 'Изменён статус', `${item.title}: ${oldStatus} → ${item.status}`, item.id);
-        saveDatabase(); return sendJson(res, 200, item);
+        item.updatedAt = Date.now(); await saveDatabase(); return sendJson(res, 200, item);
       }
       if (req.method === 'DELETE') {
         if (!canManage(session) && item.creatorId !== session.user.id) return sendJson(res, 403, { error: 'Недостаточно прав' });
-        route.collection.splice(route.collection.indexOf(item), 1); audit(session.user.id, 'delete', route.prefix, id); saveDatabase(); return sendJson(res, 200, { ok: true });
+        route.collection.splice(route.collection.indexOf(item), 1); audit(session.user.id, 'delete', route.prefix, id); await saveDatabase(); return sendJson(res, 200, { ok: true });
       }
     }
   }
@@ -514,7 +532,7 @@ async function handleApi(req, res, url) {
       userId = uid('user'); db.users.push({ id: userId, companyId: session.user.companyId, name: clean(body.name), role: 'assistant', title: clean(body.position), email, phone: clean(body.phone), passwordHash: hashPassword(String(body.password)), active: true, createdAt: Date.now() });
     }
     const employee = { id: uid('emp'), companyId: session.user.companyId, userId, name: clean(body.name), position: clean(body.position), department: clean(body.department), phone: clean(body.phone), email, status: clean(body.status || 'office') };
-    db.employees.push(employee); audit(session.user.id, 'create', 'employee', employee.id); saveDatabase(); return sendJson(res, 201, employee);
+    db.employees.push(employee); audit(session.user.id, 'create', 'employee', employee.id); await saveDatabase(); return sendJson(res, 201, employee);
   }
   if (url.pathname.startsWith('/api/employees/')) {
     if (!canManage(session)) return sendJson(res, 403, { error: 'Недостаточно прав' });
@@ -523,11 +541,11 @@ async function handleApi(req, res, url) {
     if (req.method === 'PATCH') {
       const body = await readBody(req);
       for (const key of ['name', 'position', 'department', 'phone', 'email', 'status']) if (key in body) employee[key] = clean(body[key]);
-      audit(session.user.id, 'update', 'employee', id); saveDatabase(); return sendJson(res, 200, employee);
+      employee.updatedAt = Date.now(); audit(session.user.id, 'update', 'employee', id); await saveDatabase(); return sendJson(res, 200, employee);
     }
     if (req.method === 'DELETE') {
       const user = db.users.find(item => item.id === employee.userId && item.companyId === session.user.companyId); if (user) user.active = false;
-      db.employees.splice(db.employees.indexOf(employee), 1); audit(session.user.id, 'delete', 'employee', id); saveDatabase(); return sendJson(res, 200, { ok: true });
+      db.employees.splice(db.employees.indexOf(employee), 1); audit(session.user.id, 'delete', 'employee', id); await saveDatabase(); return sendJson(res, 200, { ok: true });
     }
   }
   if (url.pathname === '/api/presence' && req.method === 'POST') {
@@ -536,7 +554,7 @@ async function handleApi(req, res, url) {
     let presence = db.presences.find(item => item.companyId === session.user.companyId && item.userId === session.user.id);
     if (!presence) { presence = { companyId: session.user.companyId, userId: session.user.id }; db.presences.push(presence); }
     Object.assign(presence, { value: clean(body.value).slice(0, 80), note: clean(body.note).slice(0, 240), updatedAt: Date.now() });
-    audit(session.user.id, 'update', 'presence', session.user.id); saveDatabase(); return sendJson(res, 200, presence);
+    audit(session.user.id, 'update', 'presence', session.user.id); await saveDatabase(); return sendJson(res, 200, presence);
   }
   return sendJson(res, 404, { error: 'Маршрут не найден' });
 }
@@ -555,10 +573,30 @@ function serveStatic(req, res, url) {
   fs.createReadStream(filePath).pipe(res);
 }
 
+async function initializeStorage() {
+  await storage.init();
+  const cloudState = await storage.load();
+  if (cloudState && (Number(cloudState.version) || 0) < 4) await storage.backup('pre-v4-migration');
+  if (cloudState) db = migrateDatabase(cloudState);
+  applyAutomaticTimestamps(db);
+  await storage.save(db);
+  if (DATABASE_URL && !cloudState) {
+    const verified = await storage.load();
+    const collections = ['companies', 'users', 'employees', 'locations', 'stores', 'products', 'tasks', 'events', 'errands', 'notifications', 'audit'];
+    const valid = verified && verified.version === db.version && collections.every(name => (verified[name] || []).length === (db[name] || []).length);
+    if (!valid) throw new Error('PostgreSQL migration verification failed; source JSON was not modified');
+    await storage.backup('verified-initial-import');
+  }
+  if (typeof storage.ensureDailyBackup === 'function') await storage.ensureDailyBackup();
+  console.log(`ORDO storage ready: ${DATABASE_URL ? 'postgresql' : 'json-test'}`);
+}
+const storageReady = initializeStorage();
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   try {
-    if (url.pathname === '/health') return sendJson(res, 200, { status: 'ok', time: new Date().toISOString() });
+    await storageReady;
+    if (url.pathname === '/health') return sendJson(res, 200, { status: 'ok', time: new Date().toISOString(), storage: await storage.health() });
     if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
     return serveStatic(req, res, url);
   } catch (error) {
@@ -567,10 +605,10 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-setInterval(() => {
+setInterval(async () => {
   const now = Date.now();
   for (const [token, session] of sessions) if (session.expiresAt < now) sessions.delete(token);
-  const count = db.sessions.length; db.sessions = db.sessions.filter(session => session.expiresAt >= now); if (db.sessions.length !== count) saveDatabase();
+  const count = db.sessions.length; db.sessions = db.sessions.filter(session => session.expiresAt >= now); if (db.sessions.length !== count) await saveDatabase();
 }, 60_000).unref();
 
 server.listen(PORT, HOST, () => console.log(`ORDO Manager запущен: http://${HOST}:${PORT}`));

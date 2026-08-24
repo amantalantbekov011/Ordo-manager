@@ -37,6 +37,8 @@ test('health endpoint отвечает', async () => {
   const { response, value } = await request('/health');
   assert.equal(response.status, 200);
   assert.equal(value.status, 'ok');
+  assert.equal(value.storage.driver, 'json');
+  assert.equal(value.storage.connected, true);
 });
 
 test('сервер отдаёт интерфейс и статические ресурсы', async () => {
@@ -84,8 +86,11 @@ test('создание, изменение и удаление задачи', as
   const created = await request('/api/tasks', { method: 'POST', body: JSON.stringify({ title: 'Тестовая задача', date: '2026-08-12', assigneeId: 'aman', priority: 'high' }) });
   assert.equal(created.response.status, 201);
   assert.equal(created.value.title, 'Тестовая задача');
+  assert.ok(created.value.createdAt);
+  assert.ok(created.value.updatedAt);
   const changed = await request(`/api/tasks/${created.value.id}`, { method: 'PATCH', body: JSON.stringify({ status: 'done' }) });
   assert.equal(changed.value.status, 'done');
+  assert.ok(changed.value.updatedAt >= changed.value.createdAt);
   const removed = await request(`/api/tasks/${created.value.id}`, { method: 'DELETE' });
   assert.equal(removed.value.ok, true);
 });
