@@ -46,17 +46,18 @@ test('сервер отдаёт интерфейс и статические р�
   const css = await fetch(`${base}/styles.css`);
   const js = await fetch(`${base}/app.js`);
   assert.equal(html.status, 200);
-  assert.match(await html.text(), /ORDO Manager/);
+  assert.match(await html.text(), /Аман & Адина/);
   assert.equal(css.status, 200);
   assert.match(css.headers.get('content-type'), /text\/css/);
   assert.equal(js.status, 200);
   assert.match(js.headers.get('content-type'), /javascript/);
   assert.match(js.headers.get('cache-control'), /no-store/);
   const currentHtml = await (await fetch(`${base}/`)).text();
-  assert.match(currentHtml, /<button data-page="stores">/);
+  assert.match(currentHtml, /data-lang="ky"/);
+  assert.match(currentHtml, /id="seconds"/);
   assert.match(currentHtml, /app\.js\?v=[^"']+/);
-  assert.match(await (await fetch(`${base}/app.js`)).text(), /stores: renderStores/);
-  assert.match(await (await fetch(`${base}/app.js`)).text(), /pages\.has\(requestedPage\)/);
+  assert.match(await (await fetch(`${base}/app.js`)).text(), /function setLang/);
+  assert.match(await (await fetch(`${base}/app.js`)).text(), /setInterval\(tick,1000\)/);
 });
 
 test('закрытый API требует авторизацию', async () => {
