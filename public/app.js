@@ -4,7 +4,7 @@ const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const pages = new Set(['dashboard', 'tasks', 'calendar', 'meetings', 'errands', 'chat', 'employees', 'locations', 'stores', 'reports']);
 const requestedPage = new URLSearchParams(location.search).get('view');
-const state = { data: null, page: pages.has(requestedPage) ? requestedPage : 'dashboard', taskFilter: 'all', taskLocation: '', calendarLocation: '', calendarMode: 'month', reportPeriod: 'month', reportUser: '', search: '', calendar: new Date(), storeTab: 'matrix', storeFilters: { agent: '', supervisor: '', district: '', product: '', availability: '' }, conversations: [], activeConversation: '', chatMessages: [], chatHasMore: false, chatBusy: false, chatLoading: false, chatError: '', chatPollBusy: false };
+const state = { data: null, page: pages.has(requestedPage) ? requestedPage : 'dashboard', taskFilter: 'all', taskLocation: '', calendarLocation: '', calendarMode: 'month', reportPeriod: 'month', reportUser: '', search: '', calendar: new Date(), storeTab: 'matrix', storeFilters: { agent: '', supervisor: '', district: '', product: '', availability: '' }, conversations: [], activeConversation: '', chatMessages: [], chatHasMore: false, chatBusy: false, chatLoading: false, chatError: '', chatPollBusy: false, chatPollTimer: 0, chatPollAbort: null, chatPollFailures: 0, chatPollCount: 0, chatSending: false };
 const labels = {
   status: { new: 'Новая', work: 'В работе', wait: 'Ожидает', done: 'Выполнено' },
   priority: { low: 'Низкий', medium: 'Средний', high: 'Высокий', urgent: 'Срочный' },
@@ -39,7 +39,7 @@ async function refresh(render = true) {
   state.data.stores ||= []; state.data.products ||= []; state.data.matrix ||= {}; state.data.matrixHistory ||= []; state.data.locations ||= [];
   if (render) renderPage();
 }
-function showLogin() { state.data=null; state.chatPollBusy=false; $('#appView').classList.add('hidden'); $('#loginView').classList.remove('hidden'); $('#loginForm').classList.remove('hidden'); $('#registerForm').classList.add('hidden'); }
+function showLogin() { stopChatPolling(); state.data=null; $('#appView').classList.add('hidden'); $('#loginView').classList.remove('hidden'); $('#loginForm').classList.remove('hidden'); $('#registerForm').classList.add('hidden'); }
 function showApp() {
   $('#loginView').classList.add('hidden'); $('#appView').classList.remove('hidden');
   const user = state.data.user;
@@ -59,7 +59,7 @@ $('#loginForm').addEventListener('submit', async event => {
   event.preventDefault();
   try {
     await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ userId: $('#loginUser').value, password: $('#loginPassword').value }) });
-    await refresh(false); showApp(); loadConversations(true).catch(reportChatError); toast('Вход выполнен');
+    await refresh(false); showApp(); if(state.page==='chat')startChatPolling(true); toast('Вход выполнен');
   } catch (error) { toast(error.message, true); }
 });
 $('#togglePassword').addEventListener('click', () => { const field = $('#loginPassword'); field.type = field.type === 'password' ? 'text' : 'password'; });
@@ -69,7 +69,7 @@ $('#navigation').addEventListener('click', event => {
   const page = button.dataset.page;
   state.page = page; history.pushState({ page }, '', page === 'dashboard' ? '/' : `/?view=${page}`);
   $$('#navigation [data-page]').forEach(item => item.classList.toggle('active', item === button));
-  $('#sidebar').classList.remove('open'); renderPage(); if(page==='chat') loadConversations(true).catch(reportChatError);
+  $('#sidebar').classList.remove('open'); if(page==='chat'){renderPage();startChatPolling(true);}else{stopChatPolling();renderPage();}
 });
 $('#showRegister').addEventListener('click', () => { $('#loginForm').classList.add('hidden'); $('#registerForm').classList.remove('hidden'); });
 $('#showLogin').addEventListener('click', () => { $('#registerForm').classList.add('hidden'); $('#loginForm').classList.remove('hidden'); });
@@ -81,7 +81,7 @@ $('#registerForm').addEventListener('submit', async event => {
 window.addEventListener('popstate', () => {
   const page = new URLSearchParams(location.search).get('view');
   state.page = pages.has(page) ? page : 'dashboard';
-  if (state.data) renderPage();
+  if (state.data) { if(state.page==='chat'){renderPage();startChatPolling(true);}else{stopChatPolling();renderPage();} }
 });
 $('#openSidebar').addEventListener('click', () => $('#sidebar').classList.add('open'));
 $('#closeSidebar').addEventListener('click', () => $('#sidebar').classList.remove('open'));
@@ -194,11 +194,11 @@ function renderReports() {
     <div class="content-grid"><section class="panel"><div class="panel-head"><h2>Исполнение по направлениям</h2></div><div class="report-bars">${categories.map(category=>{const list=reportTasks.filter(item=>item.category===category);const percent=list.length?Math.round(list.filter(item=>item.status==='done').length/list.length*100):0;return `<div class="report-line"><div><strong>${esc(category)}</strong><span>${list.length} задач · ${percent}% выполнено</span></div><div class="report-track"><i style="width:${percent}%"></i></div></div>`}).join('')||empty('Данных пока нет','Измените период или сотрудника')}</div></section>
     <aside class="panel"><div class="panel-head"><h2>Последние действия</h2></div><div class="audit-list">${state.data.audit.slice(0,12).map(entry=>`<div class="audit-row"><i>${initials(personName(entry.userId))}</i><div><strong>${esc(personName(entry.userId))}</strong><span>${auditLabels[entry.action]||entry.action} ${entityLabels[entry.entity]||entry.entity}</span><small>${new Date(entry.at).toLocaleString('ru-RU')}</small></div></div>`).join('')||empty('Действий пока нет','Изменения появятся здесь')}</div></aside></div>`;
 }
-async function loadConversations(render = false) {
+async function loadConversations(render = false, signal) {
   if (!state.data) return;
   state.chatLoading = true;
   const previousUnread = state.conversations.reduce((sum,item)=>sum+item.unread,0);
-  const payload = await api('/api/chat/conversations');
+  const payload = await api('/api/chat/conversations',{signal});
   state.conversations = Array.isArray(payload) ? payload.filter(item=>item&&item.id&&item.user) : [];
   state.chatError = '';
   const unread = state.conversations.reduce((sum,item)=>sum+item.unread,0), badge=$('#navChatCount'); if(badge) badge.textContent=unread||'';
@@ -228,7 +228,7 @@ window.openConversation=async id=>{state.activeConversation=id;state.chatMessage
 window.closeConversation=()=>{state.activeConversation='';renderChat();}; window.setChatSearch=value=>{state.search=value.toLowerCase().trim();renderChat();};
 window.loadOlderMessages=async()=>{if(!state.chatMessages.length)return;const oldHeight=$('#chatMessages').scrollHeight;await loadMessages(state.chatMessages[0].createdAt);renderChat();$('#chatMessages').scrollTop=$('#chatMessages').scrollHeight-oldHeight;};
 window.chatScroll=node=>{if(node.scrollTop<30&&state.chatHasMore)loadOlderMessages();};
-async function sendChatMessage(event){event.preventDefault();const form=new FormData(event.target),file=form.get('attachment'),body={text:form.get('text')};if(file?.size){if(file.size>4*1024*1024)return toast('Размер файла должен быть не более 4 МБ',true);body.attachment={name:file.name,mime:file.type,data:await fileToBase64(file)};}if(!body.text.trim()&&!body.attachment)return;const button=event.target.querySelector('button');button.disabled=true;try{await api(`/api/chat/conversations/${state.activeConversation}/messages`,{method:'POST',body:JSON.stringify(body)});event.target.reset();await loadMessages();await loadConversations();renderChat();}catch(error){toast(error.message,true);}finally{button.disabled=false;}}
+async function sendChatMessage(event){event.preventDefault();if(state.chatSending)return;const form=new FormData(event.target),file=form.get('attachment'),body={text:form.get('text'),clientId:crypto.randomUUID()};if(file?.size){if(file.size>4*1024*1024)return toast('Размер файла должен быть не более 4 МБ',true);body.attachment={name:file.name,mime:file.type,data:await fileToBase64(file)};}if(!body.text.trim()&&!body.attachment)return;const button=event.target.querySelector('button');state.chatSending=true;button.disabled=true;button.textContent='Отправка…';try{await api(`/api/chat/conversations/${state.activeConversation}/messages`,{method:'POST',body:JSON.stringify(body)});event.target.reset();await loadMessages();await loadConversations();safeRenderChat();}catch(error){toast(`Не отправлено — повторить. ${error.message}`,true);}finally{state.chatSending=false;if(button.isConnected){button.disabled=false;button.textContent='Отправить';}}}
 window.createTaskFromMessage=id=>{const message=state.chatMessages.find(x=>x.id===id);if(!message)return;const active=state.conversations.find(x=>x.id===state.activeConversation);openEntityModal('task','',{title:'Задача из чата',description:message.text,assigneeId:active?.user.id||'aman'});};
 function renderPage() {
   if (!state.data) return;
@@ -283,5 +283,13 @@ window.openLocationModal=(id='')=>{const l=id?state.data.locations.find(x=>x.id=
 window.deleteLocation=async id=>{if(!confirm('Удалить объект? Связанные записи сохранятся без привязки к нему.'))return;try{await api(`/api/locations/${id}`,{method:'DELETE'});closeModal();await refresh();toast('Объект удалён');}catch(error){toast(error.message,true);}};
 window.openPresenceModal=()=>{const p=state.data.presence;openModal(`<h2>Я сейчас</h2><p>Статус виден директору на главном экране.</p><form id="presenceForm" class="form-grid"><label class="full">Текущее место<select name="value">${['В головном офисе','На складе №1','На складе №2','На встрече','В пути','Другое'].map(x=>option(x,x,p.value)).join('')}</select></label><label class="full">Комментарий<input name="note" value="${esc(p.note)}" maxlength="240"></label><div class="form-actions full"><button type="button" class="button secondary" onclick="closeModal()">Отмена</button><button class="button primary">Обновить</button></div></form>`);$('#presenceForm').addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/presence',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(e.target).entries()))});closeModal();await refresh();toast('Статус обновлён');}catch(error){toast(error.message,true);}});};
 
-(async()=>{try{await refresh(false);showApp();loadConversations(true).catch(reportChatError);}catch{showLogin();}})();
-setInterval(async()=>{if(!state.data||state.chatPollBusy)return;state.chatPollBusy=true;try{const before=state.chatMessages.at(-1)?.createdAt||0;await loadConversations(false);if(state.page==='chat'&&state.activeConversation){const result=await api(`/api/chat/conversations/${state.activeConversation}/messages?limit=30`),messages=Array.isArray(result.messages)?result.messages:[];if(messages.at(-1)?.createdAt>before){const draft=$('#chatForm textarea')?.value||'';state.chatMessages=messages;await api(`/api/chat/conversations/${state.activeConversation}/read`,{method:'POST',body:'{}'});safeRenderChat();if(draft&&$('#chatForm textarea'))$('#chatForm textarea').value=draft;}}else if(state.page==='chat')safeRenderChat();}catch(error){reportChatError(error);}finally{state.chatPollBusy=false;}},4000);
+function stopChatPolling(){clearTimeout(state.chatPollTimer);state.chatPollTimer=0;state.chatPollAbort?.abort();state.chatPollAbort=null;state.chatPollBusy=false;}
+function scheduleChatPoll(delay=3000){clearTimeout(state.chatPollTimer);if(state.data&&state.page==='chat')state.chatPollTimer=setTimeout(chatPollTick,delay);}
+function startChatPolling(immediate=false){stopChatPolling();state.chatPollFailures=0;state.chatPollCount=0;if(immediate)chatPollTick();else scheduleChatPoll();}
+async function chatPollTick(){
+  if(!state.data||state.page!=='chat'||state.chatPollBusy)return;state.chatPollBusy=true;const controller=new AbortController();state.chatPollAbort=controller;
+  try{const before=state.chatMessages.at(-1)?.createdAt||0,conversationVersion=state.conversations.map(item=>`${item.id}:${item.updatedAt}:${item.unread}`).join('|');if(state.chatPollCount++%3===0||!state.conversations.length){await loadConversations(false,controller.signal);if(!state.activeConversation&&conversationVersion!==state.conversations.map(item=>`${item.id}:${item.updatedAt}:${item.unread}`).join('|'))safeRenderChat();}if(state.activeConversation){const result=await api(`/api/chat/conversations/${state.activeConversation}/messages?limit=30`,{signal:controller.signal}),messages=Array.isArray(result.messages)?result.messages:[];if(messages.at(-1)?.createdAt>before){const draft=$('#chatForm textarea')?.value||'';state.chatMessages=messages;if(messages.some(item=>item.senderId!==state.data.user.id&&!item.readAt))await api(`/api/chat/conversations/${state.activeConversation}/read`,{method:'POST',body:'{}',signal:controller.signal});safeRenderChat();if(draft&&$('#chatForm textarea'))$('#chatForm textarea').value=draft;}}state.chatPollFailures=0;state.chatError='';}
+  catch(error){if(error.name!=='AbortError'){state.chatPollFailures=Math.min(state.chatPollFailures+1,5);reportChatError(error);}}
+  finally{if(state.chatPollAbort===controller)state.chatPollAbort=null;state.chatPollBusy=false;scheduleChatPoll(state.chatPollFailures?Math.min(30000,3000*2**state.chatPollFailures):3000);}
+}
+(async()=>{try{await refresh(false);showApp();if(state.page==='chat')startChatPolling(true);}catch{showLogin();}})();

@@ -264,10 +264,12 @@ test('чат синхронизирует сообщения, непрочита
   const id = conversation.value.id;
   const sent = await chatRequest(`/api/chat/conversations/${id}/messages`, directorCookie, 'POST', {text:`Привет 👋 ${'длинный текст '.repeat(80)}`});
   assert.equal(sent.response.status, 201); assert.equal(sent.value.readAt, undefined);
+  const dedupeKey = `test-${Date.now()}`, once = await chatRequest(`/api/chat/conversations/${id}/messages`, directorCookie, 'POST', {text:'Один раз',clientId:dedupeKey}), twice = await chatRequest(`/api/chat/conversations/${id}/messages`, directorCookie, 'POST', {text:'Один раз',clientId:dedupeKey});
+  assert.equal(once.value.id, twice.value.id);
   const assistantList = await chatRequest('/api/chat/conversations', assistantCookie);
   assert.ok(assistantList.value.find(item=>item.id===id).unread >= 1);
   const assistantMessages = await chatRequest(`/api/chat/conversations/${id}/messages?limit=30`, assistantCookie);
-  assert.match(assistantMessages.value.messages.at(-1).text, /👋/);
+  assert.match(assistantMessages.value.messages.find(item=>item.id===sent.value.id).text, /👋/);
   await chatRequest(`/api/chat/conversations/${id}/read`, assistantCookie, 'POST', {});
   const directorMessages = await chatRequest(`/api/chat/conversations/${id}/messages`, directorCookie);
   assert.ok(directorMessages.value.messages.find(item=>item.id===sent.value.id).readAt);

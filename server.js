@@ -367,7 +367,9 @@ async function handleApi(req, res, url) {
     }
     if (req.method === 'POST') {
       const body = await readBody(req), text = clean(body.text).slice(0, 8000); if (!text && !body.attachment) return sendJson(res, 400, { error: 'Введите сообщение или выберите файл' });
-      const now = Date.now(), message = { id: uid('message'), companyId: session.user.companyId, conversationId, senderId: session.user.id, text, type: body.type === 'task' ? 'task' : 'text', attachments: [], createdAt: now, updatedAt: now };
+      const clientId = clean(body.clientId).slice(0, 100), duplicate = clientId && db.messages.find(item => item.conversationId === conversationId && item.senderId === session.user.id && item.clientId === clientId);
+      if (duplicate) return sendJson(res, 200, publicMessage(duplicate));
+      const now = Date.now(), message = { id: uid('message'), clientId, companyId: session.user.companyId, conversationId, senderId: session.user.id, text, type: body.type === 'task' ? 'task' : 'text', attachments: [], createdAt: now, updatedAt: now };
       if (body.attachment) {
         const name = path.basename(clean(body.attachment.name)).slice(0, 180), mime = clean(body.attachment.mime), extension = ALLOWED_UPLOADS.get(mime), bytes = Buffer.from(String(body.attachment.data || ''), 'base64');
         if (!extension || !bytes.length || bytes.length > FILE_LIMIT || !validFileSignature(mime, bytes)) return sendJson(res, 400, { error: 'Недопустимый файл' });
