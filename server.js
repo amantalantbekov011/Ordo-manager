@@ -90,6 +90,9 @@ function seedDatabase() {
     ],
     presences: [{ companyId, userId: 'aman', value: 'В офисе', note: '', updatedAt: Date.now() }],
     notifications: [],
+    conversations: [],
+    conversationMembers: [],
+    messages: [],
     sessions: [],
     audit: []
   };
@@ -109,10 +112,13 @@ function migrateDatabase(value) {
   db.matrix = db.matrix && typeof db.matrix === 'object' ? db.matrix : {};
   db.matrixHistory = Array.isArray(db.matrixHistory) ? db.matrixHistory : [];
   db.notifications = Array.isArray(db.notifications) ? db.notifications : [];
+  db.conversations = Array.isArray(db.conversations) ? db.conversations : [];
+  db.conversationMembers = Array.isArray(db.conversationMembers) ? db.conversationMembers : [];
+  db.messages = Array.isArray(db.messages) ? db.messages : [];
   db.sessions = Array.isArray(db.sessions) ? db.sessions : [];
   db.presences = Array.isArray(db.presences) ? db.presences : [db.presence || fresh.presences[0]];
   delete db.presence;
-  for (const collection of [db.users, db.employees, db.locations, db.stores, db.products, db.tasks || [], db.events || [], db.errands || [], db.matrixHistory, db.audit || [], db.notifications, db.presences]) {
+  for (const collection of [db.users, db.employees, db.locations, db.stores, db.products, db.tasks || [], db.events || [], db.errands || [], db.matrixHistory, db.audit || [], db.notifications, db.presences, db.conversations, db.conversationMembers, db.messages]) {
     for (const item of collection) item.companyId ||= legacyCompanyId;
   }
   db.products.forEach((product, index) => { if (!Number.isFinite(product.order)) product.order = index; });
@@ -158,7 +164,7 @@ try {
 
 function applyAutomaticTimestamps(database) {
   const now = Date.now();
-  const collections = ['companies', 'users', 'employees', 'locations', 'stores', 'products', 'matrixHistory', 'tasks', 'events', 'errands', 'notifications', 'audit'];
+  const collections = ['companies', 'users', 'employees', 'locations', 'stores', 'products', 'matrixHistory', 'tasks', 'events', 'errands', 'notifications', 'audit', 'conversations', 'conversationMembers', 'messages'];
   for (const name of collections) for (const item of database[name] || []) {
     item.createdAt ||= item.at || now;
     item.updatedAt ||= item.createdAt;
@@ -335,14 +341,60 @@ async function handleApi(req, res, url) {
   const session = getSession(req);
   if (!session) return sendJson(res, 401, { error: 'Необходим вход' });
 
+  if (url.pathname === '/api/chat/conversations' && req.method === 'GET') {
+    const memberships = db.conversationMembers.filter(item => item.companyId === session.user.companyId && item.userId === session.user.id);
+    const result = memberships.map(member => {
+      const conversation = db.conversations.find(item => item.id === member.conversationId);
+      const otherMember = db.conversationMembers.find(item => item.conversationId === member.conversationId && item.userId !== session.user.id);
+      const other = db.users.find(item => item.id === otherMember?.userId);
+      const messages = db.messages.filter(item => item.conversationId === member.conversationId).sort((a,b) => b.createdAt-a.createdAt);
+      return { id: conversation.id, updatedAt: conversation.updatedAt, user: other ? publicUser(other) : null, lastMessage: messages[0] ? publicMessage(messages[0]) : null, unread: messages.filter(item => item.senderId !== session.user.id && !item.readAt).length };
+    }).filter(item => item.user).sort((a,b) => b.updatedAt-a.updatedAt);
+    return sendJson(res, 200, result);
+  }
+  if (url.pathname === '/api/chat/conversations' && req.method === 'POST') {
+    const body = await readBody(req), memberId = clean(body.memberId); requireKnownUser(memberId, session.user.companyId, 'Сотрудник');
+    if (memberId === session.user.id) return sendJson(res, 400, { error: 'Нельзя создать диалог с собой' });
+    const conversation = ensureDirectConversation(session.user.companyId, session.user.id, memberId); await saveDatabase(); return sendJson(res, 201, conversation);
+  }
+  const chatMessagesMatch = url.pathname.match(/^\/api\/chat\/conversations\/([^/]+)\/messages$/);
+  if (chatMessagesMatch) {
+    const conversationId = decodeURIComponent(chatMessagesMatch[1]); requireConversation(session, conversationId);
+    if (req.method === 'GET') {
+      const before = Number(url.searchParams.get('before')) || Infinity, limit = Math.min(50, Math.max(1, Number(url.searchParams.get('limit')) || 30));
+      const all = db.messages.filter(item => item.conversationId === conversationId && item.createdAt < before).sort((a,b) => b.createdAt-a.createdAt);
+      return sendJson(res, 200, { messages: all.slice(0, limit).reverse().map(publicMessage), hasMore: all.length > limit });
+    }
+    if (req.method === 'POST') {
+      const body = await readBody(req), text = clean(body.text).slice(0, 8000); if (!text && !body.attachment) return sendJson(res, 400, { error: 'Введите сообщение или выберите файл' });
+      const now = Date.now(), message = { id: uid('message'), companyId: session.user.companyId, conversationId, senderId: session.user.id, text, type: body.type === 'task' ? 'task' : 'text', attachments: [], createdAt: now, updatedAt: now };
+      if (body.attachment) {
+        const name = path.basename(clean(body.attachment.name)).slice(0, 180), mime = clean(body.attachment.mime), extension = ALLOWED_UPLOADS.get(mime), bytes = Buffer.from(String(body.attachment.data || ''), 'base64');
+        if (!extension || !bytes.length || bytes.length > FILE_LIMIT || !validFileSignature(mime, bytes)) return sendJson(res, 400, { error: 'Недопустимый файл' });
+        const storageName = `${uid('chatfile')}${extension}`; fs.writeFileSync(path.join(UPLOAD_DIR, storageName), bytes);
+        message.attachments.push({ id: uid('attachment'), name, mime, size: bytes.length, storageName, userId: session.user.id, createdAt: now, updatedAt: now });
+      }
+      db.messages.push(message); const conversation = db.conversations.find(item => item.id === conversationId); conversation.updatedAt = now;
+      for (const member of db.conversationMembers.filter(item => item.conversationId === conversationId && item.userId !== session.user.id)) notify(session.user.companyId, member.userId, 'chat', `Сообщение от ${session.user.name}`, text.slice(0, 120) || 'Вложение', message.id);
+      await saveDatabase(); return sendJson(res, 201, publicMessage(message));
+    }
+  }
+  const chatReadMatch = url.pathname.match(/^\/api\/chat\/conversations\/([^/]+)\/read$/);
+  if (chatReadMatch && req.method === 'POST') {
+    const conversationId = decodeURIComponent(chatReadMatch[1]); requireConversation(session, conversationId); const now = Date.now();
+    for (const message of db.messages) if (message.conversationId === conversationId && message.senderId !== session.user.id && !message.readAt) { message.readAt = now; message.updatedAt = now; }
+    const membership = chatMembership(conversationId, session.user.id); membership.lastReadAt = now; membership.updatedAt = now; await saveDatabase(); return sendJson(res, 200, { ok: true, readAt: now });
+  }
+
   if (url.pathname.startsWith('/api/attachments/')) {
     const id = decodeURIComponent(url.pathname.slice('/api/attachments/'.length));
     let parent, attachment;
-    for (const collection of [db.tasks, db.events, db.errands]) {
+    for (const collection of [db.tasks, db.events, db.errands, db.messages]) {
       parent = collection.find(item => item.companyId === session.user.companyId && item.attachments?.some(file => file.id === id));
       if (parent) { attachment = parent.attachments.find(file => file.id === id); break; }
     }
-    if (!parent || !attachment || !visibleTo(session, parent)) return sendJson(res, 404, { error: 'Вложение не найдено' });
+    const chatAllowed = parent && 'conversationId' in parent && chatMembership(parent.conversationId, session.user.id);
+    if (!parent || !attachment || (!chatAllowed && !visibleTo(session, parent))) return sendJson(res, 404, { error: 'Вложение не найдено' });
     const filePath = path.join(UPLOAD_DIR, attachment.storageName);
     if (!fs.existsSync(filePath)) return sendJson(res, 404, { error: 'Файл отсутствует в хранилище' });
     if (req.method === 'GET') {
@@ -504,6 +556,7 @@ async function handleApi(req, res, url) {
       const item = route.payload(body, { id: uid(route.prefix), companyId: session.user.companyId, creatorId: session.user.id, comments: [], attachments: [], createdAt: Date.now() });
       route.collection.push(item); audit(session.user.id, 'create', route.prefix, item.id);
       if (item.assigneeId && item.assigneeId !== session.user.id) notify(session.user.companyId, item.assigneeId, 'assignment', 'Новая задача', item.title, item.id);
+      if (route.prefix === 'task') addSystemTaskMessage(item, session.user);
       await saveDatabase();
       return sendJson(res, 201, item);
     }
@@ -578,6 +631,34 @@ function serveStatic(req, res, url) {
   const cache = ['.html', '.js', '.css'].includes(path.extname(filePath)) ? 'no-cache, no-store, must-revalidate' : 'public, max-age=3600';
   res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream', 'Cache-Control': cache, 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'same-origin', 'Permissions-Policy': 'camera=(), microphone=(), geolocation=()', 'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" });
   fs.createReadStream(filePath).pipe(res);
+}
+function chatMembership(conversationId, userId) {
+  return db.conversationMembers.find(item => item.conversationId === conversationId && item.userId === userId);
+}
+function requireConversation(session, id) {
+  const conversation = db.conversations.find(item => item.id === id && item.companyId === session.user.companyId);
+  if (!conversation || !chatMembership(id, session.user.id)) throw Object.assign(new Error('Диалог не найден'), { status: 404 });
+  return conversation;
+}
+function publicMessage(message) {
+  return { ...message, attachments: (message.attachments || []).map(({ storageName, ...file }) => file) };
+}
+function ensureDirectConversation(companyId, firstUserId, secondUserId) {
+  const wanted = [firstUserId, secondUserId].sort().join(':');
+  let conversation = db.conversations.find(item => item.companyId === companyId && item.type === 'direct' && item.directKey === wanted);
+  if (!conversation) {
+    const now = Date.now(); conversation = { id: uid('conversation'), companyId, type: 'direct', directKey: wanted, createdAt: now, updatedAt: now };
+    db.conversations.push(conversation);
+    for (const userId of [firstUserId, secondUserId]) db.conversationMembers.push({ id: uid('member'), companyId, conversationId: conversation.id, userId, joinedAt: now, lastReadAt: userId === firstUserId ? now : 0, createdAt: now, updatedAt: now });
+  }
+  return conversation;
+}
+function addSystemTaskMessage(task, sender) {
+  if (!task.assigneeId || task.assigneeId === sender.id) return;
+  const conversation = ensureDirectConversation(sender.companyId, sender.id, task.assigneeId), now = Date.now();
+  const due = `${task.date}${task.time ? `, ${task.time}` : ''}`;
+  db.messages.push({ id: uid('message'), companyId: sender.companyId, conversationId: conversation.id, senderId: sender.id, text: `${sender.name} назначил(а) вам задачу:\n${task.title}\nСрок: ${due}`, type: 'task', taskId: task.id, attachments: [], createdAt: now, updatedAt: now });
+  conversation.updatedAt = now;
 }
 
 async function initializeStorage() {

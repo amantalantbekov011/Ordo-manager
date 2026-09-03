@@ -1,0 +1,10 @@
+@media(max-width:760px){
+  .chat-shell{display:block;height:calc(100vh - 150px);min-height:500px}
+  .chat-dialogs,.chat-room{height:100%}
+  .chat-shell.open .chat-dialogs{display:none}
+  .chat-shell:not(.open) .chat-room{display:none}
+  .chat-message>div{max-width:88%}
+  .chat-compose{position:sticky;bottom:0}
+  .chat-compose .button{padding:11px}
+  .chat-room>header .mobile-only{display:grid}
+}

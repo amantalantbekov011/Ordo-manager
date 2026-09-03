@@ -244,6 +244,38 @@ test('ассистент может редактировать магазины 
   cookie = directorCookie;
 });
 
+test('чат синхронизирует сообщения, непрочитанные, прочтение и защищает membership', async () => {
+  const signIn = async userId => {
+    const response = await fetch(`${base}/api/auth/login`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({userId,password:'1234'}) });
+    assert.equal(response.status, 200); return response.headers.get('set-cookie').split(';')[0];
+  };
+  const directorCookie = await signIn('director'), assistantCookie = await signIn('aman');
+  const chatRequest = async (path, cookieValue, method='GET', body) => {
+    const response = await fetch(`${base}${path}`, { method, headers:{'Content-Type':'application/json',Cookie:cookieValue}, body:body?JSON.stringify(body):undefined });
+    return { response, value:await response.json() };
+  };
+  const conversation = await chatRequest('/api/chat/conversations', directorCookie, 'POST', {memberId:'aman'});
+  assert.equal(conversation.response.status, 201);
+  const id = conversation.value.id;
+  const sent = await chatRequest(`/api/chat/conversations/${id}/messages`, directorCookie, 'POST', {text:`Привет 👋 ${'длинный текст '.repeat(80)}`});
+  assert.equal(sent.response.status, 201); assert.equal(sent.value.readAt, undefined);
+  const assistantList = await chatRequest('/api/chat/conversations', assistantCookie);
+  assert.ok(assistantList.value.find(item=>item.id===id).unread >= 1);
+  const assistantMessages = await chatRequest(`/api/chat/conversations/${id}/messages?limit=30`, assistantCookie);
+  assert.match(assistantMessages.value.messages.at(-1).text, /👋/);
+  await chatRequest(`/api/chat/conversations/${id}/read`, assistantCookie, 'POST', {});
+  const directorMessages = await chatRequest(`/api/chat/conversations/${id}/messages`, directorCookie);
+  assert.ok(directorMessages.value.messages.find(item=>item.id===sent.value.id).readAt);
+  const reply = await chatRequest(`/api/chat/conversations/${id}/messages`, assistantCookie, 'POST', {text:'Получено, отвечаю без перезагрузки'});
+  assert.equal(reply.response.status, 201);
+  const task = await fetch(`${base}/api/tasks`, {method:'POST',headers:{'Content-Type':'application/json',Cookie:directorCookie},body:JSON.stringify({title:'Задача из проверки чата',date:'2026-09-12',assigneeId:'aman'})});
+  assert.equal(task.status, 201);
+  const withSystem = await chatRequest(`/api/chat/conversations/${id}/messages`, assistantCookie);
+  assert.ok(withSystem.value.messages.some(item=>item.type==='task'&&item.text.includes('Задача из проверки чата')));
+  const hidden = await chatRequest(`/api/chat/conversations/not-a-member/messages`, assistantCookie);
+  assert.equal(hidden.response.status, 404);
+});
+
 test('выход завершает сессию', async () => {
   const logout = await request('/api/auth/logout', { method: 'POST', body: '{}' });
   assert.equal(logout.response.status, 200);
