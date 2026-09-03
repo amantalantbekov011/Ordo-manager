@@ -4,7 +4,7 @@ const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const pages = new Set(['dashboard', 'tasks', 'calendar', 'meetings', 'errands', 'chat', 'employees', 'locations', 'stores', 'reports']);
 const requestedPage = new URLSearchParams(location.search).get('view');
-const state = { data: null, page: pages.has(requestedPage) ? requestedPage : 'dashboard', taskFilter: 'all', taskLocation: '', calendarLocation: '', calendarMode: 'month', reportPeriod: 'month', reportUser: '', search: '', calendar: new Date(), storeTab: 'matrix', storeFilters: { agent: '', supervisor: '', district: '', product: '', availability: '' }, conversations: [], activeConversation: '', chatMessages: [], chatHasMore: false, chatBusy: false };
+const state = { data: null, page: pages.has(requestedPage) ? requestedPage : 'dashboard', taskFilter: 'all', taskLocation: '', calendarLocation: '', calendarMode: 'month', reportPeriod: 'month', reportUser: '', search: '', calendar: new Date(), storeTab: 'matrix', storeFilters: { agent: '', supervisor: '', district: '', product: '', availability: '' }, conversations: [], activeConversation: '', chatMessages: [], chatHasMore: false, chatBusy: false, chatLoading: false, chatError: '', chatPollBusy: false };
 const labels = {
   status: { new: 'Новая', work: 'В работе', wait: 'Ожидает', done: 'Выполнено' },
   priority: { low: 'Низкий', medium: 'Средний', high: 'Высокий', urgent: 'Срочный' },
@@ -59,7 +59,7 @@ $('#loginForm').addEventListener('submit', async event => {
   event.preventDefault();
   try {
     await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ userId: $('#loginUser').value, password: $('#loginPassword').value }) });
-    await refresh(false); await loadConversations(); showApp(); toast('Вход выполнен');
+    await refresh(false); showApp(); loadConversations(true).catch(reportChatError); toast('Вход выполнен');
   } catch (error) { toast(error.message, true); }
 });
 $('#togglePassword').addEventListener('click', () => { const field = $('#loginPassword'); field.type = field.type === 'password' ? 'text' : 'password'; });
@@ -69,7 +69,7 @@ $('#navigation').addEventListener('click', event => {
   const page = button.dataset.page;
   state.page = page; history.pushState({ page }, '', page === 'dashboard' ? '/' : `/?view=${page}`);
   $$('#navigation [data-page]').forEach(item => item.classList.toggle('active', item === button));
-  $('#sidebar').classList.remove('open'); renderPage();
+  $('#sidebar').classList.remove('open'); renderPage(); if(page==='chat') loadConversations(true).catch(reportChatError);
 });
 $('#showRegister').addEventListener('click', () => { $('#loginForm').classList.add('hidden'); $('#registerForm').classList.remove('hidden'); });
 $('#showLogin').addEventListener('click', () => { $('#registerForm').classList.add('hidden'); $('#loginForm').classList.remove('hidden'); });
@@ -196,17 +196,26 @@ function renderReports() {
 }
 async function loadConversations(render = false) {
   if (!state.data) return;
+  state.chatLoading = true;
   const previousUnread = state.conversations.reduce((sum,item)=>sum+item.unread,0);
-  state.conversations = await api('/api/chat/conversations');
+  const payload = await api('/api/chat/conversations');
+  state.conversations = Array.isArray(payload) ? payload.filter(item=>item&&item.id&&item.user) : [];
+  state.chatError = '';
   const unread = state.conversations.reduce((sum,item)=>sum+item.unread,0), badge=$('#navChatCount'); if(badge) badge.textContent=unread||'';
   if(unread>previousUnread && state.page!=='chat'){const latest=state.conversations.find(item=>item.unread);if(latest)toast(`${latest.user.name}: ${latest.lastMessage?.text?.slice(0,80)||'Новое вложение'}`);}
-  if(render && state.page==='chat') renderChat();
+  state.chatLoading = false;
+  if(render && state.page==='chat') safeRenderChat();
 }
+function reportChatError(error){state.chatLoading=false;state.chatError=error?.message||'Не удалось загрузить чат';console.error('Chat:',error);if(state.page==='chat')safeRenderChat();}
+function safeRenderChat(){try{renderChat();}catch(error){console.error('Chat render:',error);$('#pageHost').innerHTML=`${setHead('Чат','Безопасное общение внутри ORDO Manager.')}<section class="panel chat-fallback"><h2>Не удалось отобразить чат</h2><p>Остальные разделы продолжают работать.</p><button class="button primary" onclick="retryChat()">Повторить</button></section>`;}}
+window.retryChat=()=>{state.chatError='';state.chatLoading=true;safeRenderChat();loadConversations(true).catch(reportChatError);};
 async function loadMessages(before='') {
   if(!state.activeConversation||state.chatBusy)return; state.chatBusy=true;
   try{const result=await api(`/api/chat/conversations/${state.activeConversation}/messages?limit=30${before?`&before=${before}`:''}`);state.chatMessages=before?[...result.messages,...state.chatMessages]:result.messages;state.chatHasMore=result.hasMore;await api(`/api/chat/conversations/${state.activeConversation}/read`,{method:'POST',body:'{}'});await loadConversations(false);}finally{state.chatBusy=false;}
 }
 function renderChat(){
+  if(state.chatLoading&&!state.conversations.length){$('#pageHost').innerHTML=`${setHead('Чат','Безопасное общение внутри ORDO Manager.')}<section class="panel chat-fallback"><div class="chat-loader"></div><h2>Загружаем диалоги…</h2></section>`;return;}
+  if(state.chatError&&!state.conversations.length){$('#pageHost').innerHTML=`${setHead('Чат','Безопасное общение внутри ORDO Manager.')}<section class="panel chat-fallback"><h2>Чат временно недоступен</h2><p>${esc(state.chatError)}</p><button class="button primary" onclick="retryChat()">Повторить</button></section>`;return;}
   const filtered=state.conversations.filter(item=>!state.search||`${item.user.name} ${item.lastMessage?.text||''}`.toLowerCase().includes(state.search));
   const active=state.conversations.find(item=>item.id===state.activeConversation);
   const dialogs=filtered.map(item=>`<button class="chat-dialog ${item.id===state.activeConversation?'active':''}" onclick="openConversation('${item.id}')"><span class="avatar small">${initials(item.user.name)}</span><span><strong>${esc(item.user.name)}</strong><small>${esc(item.lastMessage?.text||'Начните диалог')}</small></span><time>${item.lastMessage?new Date(item.lastMessage.createdAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):''}</time>${item.unread?`<i>${item.unread}</i>`:''}</button>`).join('')||empty('Диалогов пока нет','Выберите сотрудника');
@@ -215,7 +224,7 @@ function renderChat(){
   if(active){const host=$('#chatMessages');host.scrollTop=host.scrollHeight;$('#chatForm').addEventListener('submit',sendChatMessage);$('#chatForm textarea').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();e.target.form.requestSubmit();}});}
 }
 window.startConversation=async memberId=>{if(!memberId)return;const result=await api('/api/chat/conversations',{method:'POST',body:JSON.stringify({memberId})});await loadConversations();await openConversation(result.id);};
-window.openConversation=async id=>{state.activeConversation=id;state.chatMessages=[];await loadMessages();renderChat();};
+window.openConversation=async id=>{state.activeConversation=id;state.chatMessages=[];safeRenderChat();try{await loadMessages();safeRenderChat();}catch(error){reportChatError(error);}};
 window.closeConversation=()=>{state.activeConversation='';renderChat();}; window.setChatSearch=value=>{state.search=value.toLowerCase().trim();renderChat();};
 window.loadOlderMessages=async()=>{if(!state.chatMessages.length)return;const oldHeight=$('#chatMessages').scrollHeight;await loadMessages(state.chatMessages[0].createdAt);renderChat();$('#chatMessages').scrollTop=$('#chatMessages').scrollHeight-oldHeight;};
 window.chatScroll=node=>{if(node.scrollTop<30&&state.chatHasMore)loadOlderMessages();};
@@ -225,7 +234,7 @@ function renderPage() {
   if (!state.data) return;
   $('#globalSearch').placeholder = state.page === 'stores' ? 'Поиск магазинов, адресов и продукции…' : 'Поиск по задачам и встречам…';
   $('#navTasksCount').textContent = state.data.tasks.filter(task=>task.status!=='done').length;
-  ({ dashboard: renderDashboard, tasks: renderTasks, calendar: renderCalendar, meetings: renderMeetings, errands: renderErrands, chat: renderChat, employees: renderEmployees, locations: renderLocations, stores: renderStores, reports: renderReports }[state.page] || renderDashboard)();
+  ({ dashboard: renderDashboard, tasks: renderTasks, calendar: renderCalendar, meetings: renderMeetings, errands: renderErrands, chat: safeRenderChat, employees: renderEmployees, locations: renderLocations, stores: renderStores, reports: renderReports }[state.page] || renderDashboard)();
 }
 function matches(item) { if (!state.search) return true; return Object.values(item).some(value => String(value).toLowerCase().includes(state.search)); }
 function localIso(date) { const y=date.getFullYear(),m=String(date.getMonth()+1).padStart(2,'0'),d=String(date.getDate()).padStart(2,'0'); return `${y}-${m}-${d}`; }
@@ -274,5 +283,5 @@ window.openLocationModal=(id='')=>{const l=id?state.data.locations.find(x=>x.id=
 window.deleteLocation=async id=>{if(!confirm('Удалить объект? Связанные записи сохранятся без привязки к нему.'))return;try{await api(`/api/locations/${id}`,{method:'DELETE'});closeModal();await refresh();toast('Объект удалён');}catch(error){toast(error.message,true);}};
 window.openPresenceModal=()=>{const p=state.data.presence;openModal(`<h2>Я сейчас</h2><p>Статус виден директору на главном экране.</p><form id="presenceForm" class="form-grid"><label class="full">Текущее место<select name="value">${['В головном офисе','На складе №1','На складе №2','На встрече','В пути','Другое'].map(x=>option(x,x,p.value)).join('')}</select></label><label class="full">Комментарий<input name="note" value="${esc(p.note)}" maxlength="240"></label><div class="form-actions full"><button type="button" class="button secondary" onclick="closeModal()">Отмена</button><button class="button primary">Обновить</button></div></form>`);$('#presenceForm').addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/presence',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(e.target).entries()))});closeModal();await refresh();toast('Статус обновлён');}catch(error){toast(error.message,true);}});};
 
-(async()=>{try{await refresh(false);await loadConversations();showApp();}catch{showLogin();}})();
-setInterval(async()=>{if(!state.data)return;try{const before=state.chatMessages.at(-1)?.createdAt||0;await loadConversations(state.page==='chat');if(state.page==='chat'&&state.activeConversation){const result=await api(`/api/chat/conversations/${state.activeConversation}/messages?limit=30`);if(result.messages.at(-1)?.createdAt>before){state.chatMessages=result.messages;await api(`/api/chat/conversations/${state.activeConversation}/read`,{method:'POST',body:'{}'});renderChat();}}}catch{}},4000);
+(async()=>{try{await refresh(false);showApp();loadConversations(true).catch(reportChatError);}catch{showLogin();}})();
+setInterval(async()=>{if(!state.data||state.chatPollBusy)return;state.chatPollBusy=true;try{const before=state.chatMessages.at(-1)?.createdAt||0;await loadConversations(false);if(state.page==='chat'&&state.activeConversation){const result=await api(`/api/chat/conversations/${state.activeConversation}/messages?limit=30`),messages=Array.isArray(result.messages)?result.messages:[];if(messages.at(-1)?.createdAt>before){const draft=$('#chatForm textarea')?.value||'';state.chatMessages=messages;await api(`/api/chat/conversations/${state.activeConversation}/read`,{method:'POST',body:'{}'});safeRenderChat();if(draft&&$('#chatForm textarea'))$('#chatForm textarea').value=draft;}}else if(state.page==='chat')safeRenderChat();}catch(error){reportChatError(error);}finally{state.chatPollBusy=false;}},4000);

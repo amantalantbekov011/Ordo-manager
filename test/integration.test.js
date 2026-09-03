@@ -57,6 +57,9 @@ test('сервер отдаёт интерфейс и статические р�
   assert.match(currentHtml, /app\.js\?v=[^"']+/);
   assert.match(await (await fetch(`${base}/app.js`)).text(), /stores: renderStores/);
   assert.match(await (await fetch(`${base}/app.js`)).text(), /pages\.has\(requestedPage\)/);
+  assert.match(await (await fetch(`${base}/app.js`)).text(), /chatPollBusy/);
+  assert.match(await (await fetch(`${base}/app.js`)).text(), /reportChatError/);
+  assert.match(await (await fetch(`${base}/app.js`)).text(), /retryChat/);
 });
 
 test('закрытый API требует авторизацию', async () => {
@@ -113,6 +116,8 @@ test('регистрация компании и жёсткая изоляция
   const tenantData = await (await fetch(`${base}/api/bootstrap`, { headers: { Cookie: tenantCookie } })).json();
   assert.equal(tenantData.company.name, 'Изолированная компания');
   assert.equal(tenantData.users.length, 1); assert.equal(tenantData.tasks.length, 0); assert.equal(tenantData.stores.length, 0); assert.equal(tenantData.locations.length, 1);
+  const emptyChat = await fetch(`${base}/api/chat/conversations`, { headers: { Cookie: tenantCookie } });
+  assert.equal(emptyChat.status, 200); assert.deepEqual(await emptyChat.json(), []);
   const foreignTask = await fetch(`${base}/api/tasks/task_1`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Cookie: tenantCookie }, body: JSON.stringify({ status: 'done' }) });
   const foreignStore = await fetch(`${base}/api/stores/store_1`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Cookie: tenantCookie }, body: JSON.stringify({ note: 'Попытка доступа' }) });
   assert.equal(foreignTask.status, 404); assert.equal(foreignStore.status, 404);

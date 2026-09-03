@@ -1,3 +1,4 @@
+ .chat-fallback{text-align:center;padding:60px 20px}.chat-fallback p{color:var(--muted)}.chat-loader{width:34px;height:34px;border:3px solid #dce5ec;border-top-color:var(--blue);border-radius:50%;margin:0 auto 16px;animation:chat-spin .8s linear infinite}@keyframes chat-spin{to{transform:rotate(360deg)}}
 @media(max-width:760px){
   .chat-shell{display:block;height:calc(100vh - 150px);min-height:500px}
   .chat-dialogs,.chat-room{height:100%}
