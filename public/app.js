@@ -197,14 +197,13 @@ function renderReports() {
 async function loadConversations(render = false, signal) {
   if (!state.data) return;
   state.chatLoading = true;
-  const previousUnread = state.conversations.reduce((sum,item)=>sum+item.unread,0);
-  const payload = await api('/api/chat/conversations',{signal});
-  state.conversations = Array.isArray(payload) ? payload.filter(item=>item&&item.id&&item.user) : [];
-  state.chatError = '';
-  const unread = state.conversations.reduce((sum,item)=>sum+item.unread,0), badge=$('#navChatCount'); if(badge) badge.textContent=unread||'';
-  if(unread>previousUnread && state.page!=='chat'){const latest=state.conversations.find(item=>item.unread);if(latest)toast(`${latest.user.name}: ${latest.lastMessage?.text?.slice(0,80)||'Новое вложение'}`);}
-  state.chatLoading = false;
-  if(render && state.page==='chat') safeRenderChat();
+  try{const previousUnread = state.conversations.reduce((sum,item)=>sum+item.unread,0);
+    const payload = await api('/api/chat/conversations',{signal});
+    state.conversations = Array.isArray(payload) ? payload.filter(item=>item&&item.id&&item.user) : [];
+    state.chatError = '';
+    const unread = state.conversations.reduce((sum,item)=>sum+item.unread,0), badge=$('#navChatCount'); if(badge) badge.textContent=unread||'';
+    if(unread>previousUnread && state.page!=='chat'){const latest=state.conversations.find(item=>item.unread);if(latest)toast(`${latest.user.name}: ${latest.lastMessage?.text?.slice(0,80)||'Новое вложение'}`);}
+  }finally{state.chatLoading = false;if(render && state.page==='chat') safeRenderChat();}
 }
 function reportChatError(error){state.chatLoading=false;if(error?.status===401)return;state.chatError=error?.message||'Не удалось загрузить чат';console.error('Chat:',error);if(state.page==='chat')safeRenderChat();}
 function safeRenderChat(){try{renderChat();}catch(error){console.error('Chat render:',error);$('#pageHost').innerHTML=`${setHead('Чат','Безопасное общение внутри ORDO Manager.')}<section class="panel chat-fallback"><h2>Не удалось отобразить чат</h2><p>Остальные разделы продолжают работать.</p><button class="button primary" onclick="retryChat()">Повторить</button></section>`;}}
@@ -214,7 +213,7 @@ async function loadMessages(before='') {
   try{const result=await api(`/api/chat/conversations/${state.activeConversation}/messages?limit=30${before?`&before=${before}`:''}`);state.chatMessages=before?[...result.messages,...state.chatMessages]:result.messages;state.chatHasMore=result.hasMore;await api(`/api/chat/conversations/${state.activeConversation}/read`,{method:'POST',body:'{}'});await loadConversations(false);}finally{state.chatBusy=false;}
 }
 function renderChat(){
-  if(state.chatLoading&&!state.conversations.length){$('#pageHost').innerHTML=`${setHead('Чат','Безопасное общение внутри ORDO Manager.')}<section class="panel chat-fallback"><div class="chat-loader"></div><h2>Загружаем диалоги…</h2></section>`;return;}
+  if(state.chatLoading&&!state.conversations.length){$('#pageHost').innerHTML=`${setHead('Чат','Безопасное общение внутри ORDO Manager.')}<section class="chat-shell"><div class="panel chat-fallback"><div class="chat-loader"></div><h2>Подключение к серверу…</h2></div></section>`;return;}
   if(state.chatError&&!state.conversations.length){$('#pageHost').innerHTML=`${setHead('Чат','Безопасное общение внутри ORDO Manager.')}<section class="panel chat-fallback"><h2>Чат временно недоступен</h2><p>${esc(state.chatError)}</p><button class="button primary" onclick="retryChat()">Повторить</button></section>`;return;}
   const filtered=state.conversations.filter(item=>!state.search||`${item.user.name} ${item.lastMessage?.text||''}`.toLowerCase().includes(state.search));
   const active=state.conversations.find(item=>item.id===state.activeConversation);
