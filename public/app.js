@@ -26,7 +26,7 @@ async function api(path, options = {}) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (response.status === 401 && !path.includes('/login')) showLogin();
-    throw new Error(payload.error || 'Ошибка запроса');
+    const error = new Error(payload.error || 'Ошибка запроса'); error.status=response.status; throw error;
   }
   return payload;
 }
@@ -39,7 +39,7 @@ async function refresh(render = true) {
   state.data.stores ||= []; state.data.products ||= []; state.data.matrix ||= {}; state.data.matrixHistory ||= []; state.data.locations ||= [];
   if (render) renderPage();
 }
-function showLogin() { $('#appView').classList.add('hidden'); $('#loginView').classList.remove('hidden'); $('#loginForm').classList.remove('hidden'); $('#registerForm').classList.add('hidden'); }
+function showLogin() { state.data=null; state.chatPollBusy=false; $('#appView').classList.add('hidden'); $('#loginView').classList.remove('hidden'); $('#loginForm').classList.remove('hidden'); $('#registerForm').classList.add('hidden'); }
 function showApp() {
   $('#loginView').classList.add('hidden'); $('#appView').classList.remove('hidden');
   const user = state.data.user;
@@ -206,7 +206,7 @@ async function loadConversations(render = false) {
   state.chatLoading = false;
   if(render && state.page==='chat') safeRenderChat();
 }
-function reportChatError(error){state.chatLoading=false;state.chatError=error?.message||'Не удалось загрузить чат';console.error('Chat:',error);if(state.page==='chat')safeRenderChat();}
+function reportChatError(error){state.chatLoading=false;if(error?.status===401)return;state.chatError=error?.message||'Не удалось загрузить чат';console.error('Chat:',error);if(state.page==='chat')safeRenderChat();}
 function safeRenderChat(){try{renderChat();}catch(error){console.error('Chat render:',error);$('#pageHost').innerHTML=`${setHead('Чат','Безопасное общение внутри ORDO Manager.')}<section class="panel chat-fallback"><h2>Не удалось отобразить чат</h2><p>Остальные разделы продолжают работать.</p><button class="button primary" onclick="retryChat()">Повторить</button></section>`;}}
 window.retryChat=()=>{state.chatError='';state.chatLoading=true;safeRenderChat();loadConversations(true).catch(reportChatError);};
 async function loadMessages(before='') {
