@@ -397,7 +397,8 @@ async function handleApi(req, res, url) {
     if (!canManage(session)) return sendJson(res, 403, { error: 'Только директор может добавлять объекты' });
     const body = await readBody(req); requireFields(body, ['name', 'type']);
     if (!['head_office', 'office', 'warehouse', 'branch'].includes(body.type)) return sendJson(res, 400, { error: 'Некорректный тип объекта' });
-    const location = { id: uid('location'), companyId: session.user.companyId, name: clean(body.name).slice(0, 160), type: body.type, address: clean(body.address).slice(0, 240), responsible: clean(body.responsible).slice(0, 160), phone: clean(body.phone).slice(0, 80), note: clean(body.note).slice(0, 1000), status: body.status === 'inactive' ? 'inactive' : 'active', createdAt: Date.now() };
+    const now = Date.now();
+    const location = { id: uid('location'), companyId: session.user.companyId, name: clean(body.name).slice(0, 160), type: body.type, address: clean(body.address).slice(0, 240), responsible: clean(body.responsible).slice(0, 160), phone: clean(body.phone).slice(0, 80), note: clean(body.note).slice(0, 1000), status: body.status === 'inactive' ? 'inactive' : 'active', createdAt: now, updatedAt: now };
     db.locations.push(location); audit(session.user.id, 'create', 'location', location.id); await saveDatabase(); return sendJson(res, 201, location);
   }
   if (url.pathname.startsWith('/api/locations/')) {
@@ -408,11 +409,16 @@ async function handleApi(req, res, url) {
       if (body.type && ['head_office','office','warehouse','branch'].includes(body.type)) location.type=body.type; if (body.status && ['active','inactive'].includes(body.status)) location.status=body.status;
       location.updatedAt=Date.now(); audit(session.user.id,'update','location',id); await saveDatabase(); return sendJson(res,200,location);
     }
+    if (req.method === 'DELETE') {
+      for (const collection of [db.tasks, db.events, db.errands]) for (const item of collection) if (item.companyId === session.user.companyId && item.locationId === id) { item.locationId = ''; item.updatedAt = Date.now(); }
+      db.locations.splice(db.locations.indexOf(location), 1); audit(session.user.id, 'delete', 'location', id); await saveDatabase(); return sendJson(res, 200, { ok: true });
+    }
   }
 
   if (url.pathname === '/api/stores' && req.method === 'POST') {
     const body = await readBody(req); requireFields(body, ['name', 'address']);
-    const store = { id: uid('store'), companyId: session.user.companyId, name: clean(body.name).slice(0, 160), address: clean(body.address).slice(0, 240), district: clean(body.district).slice(0, 100), agent: clean(body.agent).slice(0, 160), supervisor: clean(body.supervisor).slice(0, 160), phone: clean(body.phone).slice(0, 80), note: clean(body.note).slice(0, 1000), createdAt: Date.now() };
+    const now = Date.now();
+    const store = { id: uid('store'), companyId: session.user.companyId, name: clean(body.name).slice(0, 160), address: clean(body.address).slice(0, 240), district: clean(body.district).slice(0, 100), agent: clean(body.agent).slice(0, 160), supervisor: clean(body.supervisor).slice(0, 160), phone: clean(body.phone).slice(0, 80), note: clean(body.note).slice(0, 1000), createdAt: now, updatedAt: now };
     db.stores.push(store); audit(session.user.id, 'create', 'store', store.id); await saveDatabase(); return sendJson(res, 201, store);
   }
   if (url.pathname.startsWith('/api/stores/')) {
@@ -432,7 +438,8 @@ async function handleApi(req, res, url) {
   if (url.pathname === '/api/products' && req.method === 'POST') {
     if (!canManage(session)) return sendJson(res, 403, { error: 'Только директор может управлять продукцией' });
     const body = await readBody(req); requireFields(body, ['name']);
-    const product = { id: uid('product'), companyId: session.user.companyId, name: clean(body.name).slice(0, 160), category: clean(body.category).slice(0, 100), variant: clean(body.variant).slice(0, 100), note: clean(body.note).slice(0, 1000), order: db.products.filter(item => item.companyId === session.user.companyId).length, createdAt: Date.now() };
+    const now = Date.now();
+    const product = { id: uid('product'), companyId: session.user.companyId, name: clean(body.name).slice(0, 160), category: clean(body.category).slice(0, 100), variant: clean(body.variant).slice(0, 100), note: clean(body.note).slice(0, 1000), order: db.products.filter(item => item.companyId === session.user.companyId).length, createdAt: now, updatedAt: now };
     db.products.push(product); audit(session.user.id, 'create', 'product', product.id); await saveDatabase(); return sendJson(res, 201, product);
   }
   if (url.pathname.startsWith('/api/products/') && url.pathname !== '/api/products/reorder') {
