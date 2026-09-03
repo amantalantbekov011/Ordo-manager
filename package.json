@@ -6,7 +6,6 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "build": "node scripts/build-site.mjs",
     "check": "node --check server.js && node --check public/app.js",
     "test": "node --test"
   },
